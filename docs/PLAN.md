@@ -30,7 +30,7 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 - [x] Cargo workspace with `gang`, `gang-core`, `unity-yaml`, `gang-merge`, `gang-csharp`; `rust-toolchain.toml`; rustfmt and clippy settings.
 - [x] GitHub Actions: macOS, Windows, Linux × (fmt, clippy `-D warnings`, test).
-- [ ] **Spike S1 — shared refs on GitHub:** on a throwaway GitHub repository, push parentless commits to `refs/gang/locks` and to branch `gang-presence` with `--force-with-lease`; 4 parallel writers for 10 minutes; confirm no lost updates and that `[skip ci]` suppresses workflows. Record the result in DESIGN §6.1 (keep custom ref or fall back to a branch).
+- [x] **Spike S1 — shared refs on GitHub:** on a throwaway GitHub repository, push parentless commits to `refs/gang/locks` and to branch `gang-presence` with `--force-with-lease`; 4 parallel writers for 10 minutes; confirm no lost updates and that `[skip ci]` suppresses workflows. Result: DESIGN §6.2 — custom refs work; presence moved to per-user refs; pushes need retries on transient errors.
 - [ ] **Spike S2 — Unity YAML corpus:** collect scenes, prefabs and assets from our own project and public Unity sample projects (2022.3 and Unity 6). Write a throwaway document indexer. In Unity, add objects to a scene and record **where new documents are inserted** (end of file vs. fileID order) — needed for DESIGN §13.7.
 - [ ] **Spike S3 — OAuth Device Flow:** register the "GANG" OAuth App with Device Flow enabled; minimal login that prints the user's login.
 - [ ] **Spike S4 — editor detection:** confirm the `Temp/UnityLockfile` try-lock approach on macOS, Windows and Linux, including after a Unity crash.
@@ -300,7 +300,7 @@ P0 ─▶ P1 ─▶ P2 ─▶ P3 ─▶ P4 ──▶ (M1)
 |---|---|---|
 | Unity YAML edge cases break round trips | High | Lossless design; corpus and fuzzing from P6 day one |
 | A merge bug corrupts a scene | High | Graph validation; never silent; backup refs; Unity-in-the-loop tests |
-| GitHub rejects custom refs or throttles presence pushes | Medium | Spike S1; branch fallback; debounce and backoff |
+| GitHub rejects custom refs or throttles presence pushes | Medium | Spike S1 done: custom refs accepted, Actions not triggered; per-user presence refs; retries with backoff |
 | Lock level 2 locks too much and blocks the team | Medium | Preview, confirmation threshold, level 1 default, `--partial` |
 | C# heuristics miss layer usages or type references | Medium | Limit rewrites to our own new lines; "needs review" list |
 | Serialization differs between Unity versions | Medium | Unity version guard; fixtures per supported version |

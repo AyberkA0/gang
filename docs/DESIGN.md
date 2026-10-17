@@ -126,7 +126,7 @@ Main dependencies: `clap`, `ratatui` + `crossterm`, `serde` / `serde_json` / `to
 |---|---|---|---|
 | Project files | Project branches (`main`, …) | Yes | Users through gang/git |
 | Project config | `.gang/config.toml` on project branches | Yes | `gang init`, `gang config --project` |
-| Presence | Branch `gang-presence`, file `.gang/<github-login>.json` | Yes | Each user writes **only their own file** |
+| Presence | One ref per user, `refs/gang/presence/<github-login>`, holding `.gang/<github-login>.json` | Yes | Each user writes **only their own ref** |
 | Locks | Ref `refs/gang/locks`, file `locks.json` | Yes | Compare-and-swap |
 | Local state | `.git/gang/` | No | GANG |
 | Personal settings | `.git/gang/local.toml` | No | User |
@@ -140,22 +140,44 @@ Presence files never appear in the working tree. In project branches, `.gang/` o
 
 ### 6.1 Shared-ref update protocol
 
-Presence and locks are updated the same way:
+Every update is a commit **without a parent**, built with plumbing only (`hash-object -w`, `mktree`, `commit-tree`), whose message ends with `[skip ci]`. The ref therefore always points at a single commit and history never grows; the working tree, index and current branch are never touched.
 
-1. `git fetch origin <ref>` → current tip `T` (or none).
-2. Build the new tree from `T`'s tree plus the local change, using plumbing only (`hash-object -w`, `mktree`, `commit-tree`). The new commit **has no parent** and its message ends with `[skip ci]`.
-3. `git push --force-with-lease=<ref>:<T> origin <C>:<ref>`.
-4. If the push is rejected, someone else updated the ref: go back to step 1 (bounded retries with jitter).
+**Presence — one ref per user.** Each user force-pushes their own ref, `refs/gang/presence/<login>`, whose tree holds only `.gang/<login>.json`. Nobody else ever writes that ref, so there is no contention and no fetch before writing. Readers fetch `refs/gang/presence/*` and see the `.gang/` folder with one file per user.
 
-Consequences:
+**Locks — one shared ref, compare-and-swap:**
 
-- The ref always points at a single commit; history never grows.
-- `--force-with-lease` makes every update a compare-and-swap, so no update is ever lost.
-- The working tree, index and current branch are never touched.
-- `[skip ci]` keeps GitHub Actions from running on presence and lock updates.
-- For presence, a retry always succeeds quickly, because every user only touches their own file. For locks, the retry re-validates the request against the new state.
+1. `git fetch origin refs/gang/locks` → current tip `T` (or none).
+2. Build the new `locks.json` from `T`'s plus the change.
+3. `git push --force-with-lease=refs/gang/locks:<T> origin <C>:refs/gang/locks`. The server checks the old value atomically, so of two concurrent writers only one wins.
+4. If rejected, re-validate the request against the new state and retry with exponential backoff and jitter.
 
-> **To verify (spike S1):** GitHub accepts pushes to `refs/gang/locks`, and `[skip ci]` suppresses workflows for these pushes. Fallback: a branch named `gang-locks`.
+**Every push is retried on failure**, not only on lease rejections: GitHub occasionally fails a push under load (see S1).
+
+### 6.2 Spike S1 results (2026-10-17)
+
+Run with [`spikes/s1_shared_refs.sh`](../spikes/s1_shared_refs.sh) against a private GitHub repository, 4 concurrent writers × 20 updates each:
+
+| Experiment | Time | Retries | Lost updates |
+|---|---|---|---|
+| Presence on per-user refs, writing as fast as possible | 32 s | 0 | 2 of 80 pushes failed with transient GitHub errors (not retried by the script) |
+| Presence on one shared branch, one update every 0–4 s per writer | 246 s | 136 | 0 |
+| Locks on one shared ref, writing as fast as possible (worst case) | 196 s | 154 | 0 |
+
+A first run of the shared presence branch with writers pushing non-stop and no backoff starved: one writer won every round and two gave up after 40 retries. This is why presence moved to per-user refs.
+
+| Measurement (average of 5) | Value |
+|---|---|
+| `git ls-remote` of all GANG refs | 1.06 s |
+| `git fetch` with no change | 0.93 s |
+| Per-user ref update (push only) | 1.67 s |
+| Shared ref update (fetch + push) | 2.83 s |
+| Update visible to another clone right after the push | 5 of 5 |
+
+Other findings:
+
+- GitHub accepts pushes to custom refs under `refs/gang/`; they are fetched normally and not shown as branches.
+- GitHub Actions: only a branch push whose commit contains a workflow file and no `[skip ci]` started a run. Pushes to `refs/gang/*`, branch pushes of commits without workflow files, and commits marked `[skip ci]` started none. GANG's commits never contain workflow files, so they cannot start runs; `[skip ci]` stays as a second guard.
+- Transient server errors (`unable to rename temporary '*.pack' file`) happened on 2.5% of pushes under parallel load.
 
 ## 7. Authentication
 
@@ -283,7 +305,7 @@ Everything else goes straight to git, including `am`, `apply`, `archive`, `bundl
 
 ### 9.1 File format
 
-Each user owns `.gang/<github-login>.json` on the `gang-presence` branch. Keys and paths are always written in sorted order, so an unchanged state produces identical bytes and no push.
+Each user owns `.gang/<github-login>.json`, stored on their own ref `refs/gang/presence/<github-login>` (§6.1). Keys and paths are always written in sorted order, so an unchanged state produces identical bytes and no push.
 
 ```json
 {
@@ -337,7 +359,7 @@ Sources: `git status --porcelain=v2 -z`, `git diff --name-status -z <upstream>..
 | File changed (watcher) | Debounce 4 s, then publish |
 | `save`, `sync`, `lock`, `unlock`, and any command that changed state | Publish immediately |
 | Heartbeat | Publish every 60 s even without changes |
-| Reading others | Every 15 s: `git ls-remote origin gang-presence refs/gang/locks`; fetch only when a tip changed |
+| Reading others | Every 15 s: `git ls-remote origin 'refs/gang/*'` (about 1 s on GitHub); fetch only the refs whose tip changed |
 | Offline | A user whose `ts` + skew is older than 5 min is shown offline; their flags stay visible |
 
 The watcher ignores `Library/`, `Temp/`, `Logs/`, `obj/`, `UserSettings/` and ignored paths.
@@ -1093,3 +1115,4 @@ editor_open = "block"                 # block | warn
 | 2026-10-17 | Object locks; lock levels 1 (direct) and 2 (+ interacting), plus level 0 (target only) for auto and file-only locks | — |
 | 2026-10-17 | Bang re-parent option for delete/modify | Only delete / keep |
 | 2026-10-17 | Team panel first; background daemon later | Daemon first |
+| 2026-10-17 | Presence on per-user refs `refs/gang/presence/<login>` (spike S1) | One shared `gang-presence` branch: writers contend and starve |

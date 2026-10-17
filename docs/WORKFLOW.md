@@ -52,7 +52,7 @@ Unity version: the project uses 6000.0.23f1
 
 Deniz installs the right version first. Opening the project with an older editor would have re-serialized hundreds of files and flooded everyone's next sync with changes nobody made.
 
-**Behind the scenes:** Device Flow login and token stored in the keychain → `git clone` → `git lfs pull` → merge driver and hook registration → `gang credential` registered as git's credential helper → fetch of the `gang-presence` branch and `refs/gang/locks`.
+**Behind the scenes:** Device Flow login and token stored in the keychain → `git clone` → `git lfs pull` → merge driver and hook registration → `gang credential` registered as git's credential helper → fetch of the team's presence refs (`refs/gang/presence/*`) and `refs/gang/locks`.
 
 ---
 
