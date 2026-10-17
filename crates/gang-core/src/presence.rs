@@ -399,6 +399,24 @@ pub fn has_origin(repo: &Repo) -> Result<bool> {
     Ok(repo.try_run(["remote", "get-url", "origin"])?.is_some())
 }
 
+/// Adds a notice to this user's presence; it goes out with the next publish
+/// (DESIGN.md §9.1). Keeps the last 20.
+pub fn add_notice(repo: &Repo, notice: Notice) -> Result<()> {
+    let mut state = load_state(repo);
+    if let Some(last) = &mut state.last {
+        last.notices.push(notice);
+        let excess = last.notices.len().saturating_sub(20);
+        last.notices.drain(..excess);
+    } else {
+        let config = Config::load(repo.root()).unwrap_or_default();
+        let mut presence = current(repo, &config, None)?;
+        presence.notices.push(notice);
+        state.last = Some(presence);
+    }
+    state.published_at = 0;
+    save_state(repo, &state)
+}
+
 /// Publishes this user's presence when it changed, or when the heartbeat is
 /// due, or when `force` is set. Only one publish runs at a time per clone.
 pub fn publish(repo: &Repo, config: &Config, force: bool) -> Result<Published> {

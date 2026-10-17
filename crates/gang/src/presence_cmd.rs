@@ -247,6 +247,7 @@ pub fn status_notes(repo: &Repo) -> Result<Vec<String>> {
         .is_none_or(|age| age > Duration::from_secs(60));
     if stale {
         let _ = presence::poll(repo);
+        let _ = gang_core::locks::fetch(repo);
         let _ = std::fs::create_dir_all(repo.gang_dir());
         let _ = std::fs::write(&stamp, "");
     }
@@ -286,6 +287,39 @@ pub fn status_notes(repo: &Repo) -> Result<Vec<String>> {
     Ok(notes)
 }
 
+/// Your changes that touch someone else's lock.
+fn lock_notes(repo: &Repo) -> Result<Vec<String>> {
+    if !setup::is_gang_repo(repo) {
+        return Ok(Vec::new());
+    }
+    let changed = gang_core::repo::split_nul(&repo.run(["diff", "--name-only", "-z", "HEAD"])?);
+    let versions: Vec<(String, Option<String>, Option<String>)> = changed
+        .into_iter()
+        .map(|path| {
+            let unity = attributes::is_unity_yaml(&path);
+            let old = unity
+                .then(|| {
+                    gang_core::semantic::blob(repo, &format!("HEAD:{path}"))
+                        .ok()
+                        .flatten()
+                })
+                .flatten();
+            let new = unity
+                .then(|| gang_core::semantic::worktree(repo, &path))
+                .flatten();
+            (path, old, new)
+        })
+        .collect();
+    let mut notes = Vec::new();
+    for hit in crate::locks_cmd::check_changes(repo, false, &versions)? {
+        notes.push(format!("⚠ {}", hit.message()));
+        if let Some(target) = hit.restore {
+            notes.push(format!("  Undo only that object: gang restore {target}"));
+        }
+    }
+    Ok(notes)
+}
+
 /// Unity files whose changes are only noise.
 fn noise_notes(repo: &Repo) -> Result<Vec<String>> {
     let rules = gang_core::semantic::rules(&Config::load(repo.root()).unwrap_or_default());
@@ -318,6 +352,14 @@ pub fn status(invocation: &Invocation, repo: Option<&Repo>) -> Result<i32> {
             println!();
             println!("Unity:");
             for note in noise {
+                println!("  {note}");
+            }
+        }
+        let locked = lock_notes(repo).unwrap_or_default();
+        if !locked.is_empty() {
+            println!();
+            println!("Locks:");
+            for note in locked {
                 println!("  {note}");
             }
         }

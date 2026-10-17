@@ -192,11 +192,11 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** nobody loses work on files that cannot be merged.
 
-- [ ] `locks.json` model; compare-and-swap writes; effective-lock computation for file, folder and glob targets.
-- [ ] `gang lock | unlock | locks` with `-m`, `--force`, `--all`, normalization, name search and picker.
-- [ ] Enforcement: watcher warnings, `status`, pre-commit, pre-push, incoming-change warnings.
-- [ ] Release prompt after push; auto locks (`--auto`, `--only`, `--dry-run`, `--watch` / `--off`), skipping files teammates are changing, automatic release, TTL expiry.
-- [ ] Bake locks (folder + settings documents) and the lighting policy.
+- [x] `locks.json` model; compare-and-swap writes (`--force-with-lease`, retries with backoff); effective-lock computation for file, folder and glob targets.
+- [x] `gang lock | unlock | locks [--tree]` with `-m`, `--force`, `--all`, lock ids, normalization, name search and picker.
+- [x] Enforcement: panel warnings, `status`, pre-commit (cached table), pre-push (fresh table), incoming-change warnings in `sync`.
+- [x] Release prompt after push; auto locks (`--auto`, `--only`, `--dry-run`, `--watch` / `--off`), skipping code and files teammates are changing, automatic release on push, TTL expiry.
+- [x] Bake locks (folder + settings documents + LightingSettings asset) and the lighting policy in pre-commit.
 
 **Done when:** 4 users locking the same file at the same moment → exactly one succeeds, every time (100 runs); enforcement fixtures pass; TTL expiry works in a simulated offline scenario.
 
@@ -206,12 +206,12 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** lock an object and everything that defines it or talks to it.
 
-- [ ] `gang-csharp`: tree-sitter index of declared types and type references per file, cached incrementally.
-- [ ] Interaction graph: E1 serialized references (with UnityEvents), E2 code references, E3 asset references.
-- [ ] Level expansion for every target kind (DESIGN §10.2); preview with reasons; confirmation threshold; all-or-nothing and `--partial`.
-- [ ] `object` and `document` targets; semantic enforcement (changed documents ∩ locked subtrees) in hooks, `status` and the watcher.
-- [ ] Derived snapshots, `--refresh`, automatic refresh for the owner.
-- [ ] `gang locks --tree`.
+- [x] `gang-csharp`: type index (declared types and identifiers, comments and strings excluded) with a small lexer instead of tree-sitter, so no C toolchain is needed. Not cached yet.
+- [x] Interaction graph: E1 serialized references (with UnityEvent methods), E2 code references, E3 prefab and ScriptableObject references.
+- [x] Level expansion for every target kind (DESIGN §10.2); preview with reasons and grouping; confirmation threshold (`--yes`); all-or-nothing and `--partial`.
+- [x] `object` and `document` targets; semantic enforcement (changed documents ∩ locked subtrees) in hooks and `status`, with an object-level restore hint.
+- [x] Derived snapshots and `--refresh`. Automatic refresh for the owner is still open.
+- [x] `gang locks --tree`.
 
 **Done when:** a fixture project with known references produces the expected target set for each level; in the same scene, changes to a locked object are blocked while changes to other objects commit normally.
 

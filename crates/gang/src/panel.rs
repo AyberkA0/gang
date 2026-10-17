@@ -53,6 +53,7 @@ struct View {
     title: String,
     me: Presence,
     team: Vec<Presence>,
+    locks: Vec<gang_core::locks::Lock>,
     synced_at: Option<i64>,
     status: String,
 }
@@ -76,6 +77,7 @@ pub fn run(repo: Repo) -> Result<i32> {
             .unwrap_or_default(),
         me: presence::current(&repo, &config, None)?,
         team: Vec::new(),
+        locks: Vec::new(),
         synced_at: None,
         status: "Connecting to the team…".to_owned(),
     };
@@ -167,9 +169,18 @@ fn start_worker(root: PathBuf, config: Config, messages: Sender<Message>) -> Sen
             let (what, result) = match job {
                 Job::Publish { force } => (
                     "publish",
-                    presence::publish(&repo, &config, force).map(|_| String::new()),
+                    presence::publish(&repo, &config, force).map(|_| {
+                        let _ = crate::locks_cmd::watch_tick(&repo);
+                        String::new()
+                    }),
                 ),
-                Job::Poll => ("poll", presence::poll(&repo).map(|_| String::new())),
+                Job::Poll => (
+                    "poll",
+                    presence::poll(&repo).map(|_| {
+                        let _ = gang_core::locks::fetch(&repo);
+                        String::new()
+                    }),
+                ),
             };
             let result = result.map_err(|e| format!("{e:#}"));
             if messages.send(Message::Finished { what, result }).is_err() {
@@ -206,6 +217,9 @@ fn refresh(repo: &Repo, config: &Config, view: &mut View) {
         if let Ok(team) = presence::team(repo) {
             view.team = team.into_iter().filter(|p| p.user != login).collect();
         }
+        if let Ok(table) = gang_core::locks::read(repo) {
+            view.locks = table.locks;
+        }
     }
 }
 
@@ -224,12 +238,46 @@ fn run_outside(terminal: DefaultTerminal, args: &[&str]) -> Result<DefaultTermin
 
 fn draw(frame: &mut Frame, view: &View, offline_after: i64) {
     let now = clock::now();
-    let [team_area, mine_area, status_area] = Layout::vertical([
+    let lock_rows = view.locks.len().min(6) as u16;
+    let [team_area, locks_area, mine_area, status_area] = Layout::vertical([
         Constraint::Length(view.team.len().max(1) as u16 + 3),
+        Constraint::Length(if lock_rows == 0 { 0 } else { lock_rows + 2 }),
         Constraint::Min(4),
         Constraint::Length(2),
     ])
     .areas(frame.area());
+
+    if lock_rows > 0 {
+        let lines: Vec<Line> = view
+            .locks
+            .iter()
+            .take(6)
+            .map(|lock| {
+                let since = clock::parse(&lock.since)
+                    .map(|t| clock::ago(now - t))
+                    .unwrap_or_default();
+                let reason = lock.reason.clone().unwrap_or_default();
+                let derived = if lock.derived.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (+{})", lock.derived.len())
+                };
+                Line::from(vec![
+                    Span::raw(" 🔒 "),
+                    Span::raw(format!("{:<40}", format!("{}{derived}", lock.root.label()))),
+                    Span::styled(
+                        format!("{:<12}", lock.owner),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!("{since:<12}{reason}")),
+                ])
+            })
+            .collect();
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" LOCKS ")),
+            locks_area,
+        );
+    }
 
     let synced = match view.synced_at {
         Some(at) => format!("synced {}", clock::ago(now - at)),
@@ -278,6 +326,16 @@ fn draw(frame: &mut Frame, view: &View, offline_after: i64) {
                 ),
                 Span::raw(file.clone()),
             ];
+            if let Some(lock) = view
+                .locks
+                .iter()
+                .find(|l| l.owner != view.me.user && l.targets().any(|t| t.covers_file(file)))
+            {
+                spans.push(Span::styled(
+                    format!("  🔒 locked by {}; you cannot commit it", lock.owner),
+                    Style::default().fg(Color::Red),
+                ));
+            }
             if let Some(users) = others.get(file.as_str()) {
                 let unique: BTreeSet<&&str> = users.iter().collect();
                 let names = unique.into_iter().copied().collect::<Vec<_>>().join(", ");
@@ -430,6 +488,7 @@ mod tests {
                     &[("Assets/Art/Hero.psd", State::Unpushed)],
                 ),
             ],
+            locks: Vec::new(),
             synced_at: Some(now),
             status: String::new(),
         };

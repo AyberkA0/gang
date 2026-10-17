@@ -81,6 +81,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
             return Ok(code);
         }
         let _ = presence::fetch(&repo);
+        let _ = gang_core::locks::fetch(&repo);
         let upstream = presence::upstream(&repo, &config)?;
 
         // 3. Merge what came in.
@@ -121,6 +122,12 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         let has_upstream = repo
             .try_run(["rev-parse", "--abbrev-ref", "@{upstream}"])?
             .is_some();
+        let pushed: Vec<String> = match &upstream {
+            Some(upstream) => {
+                split_nul(&repo.run(["diff", "--name-only", "-z", upstream, "HEAD"])?)
+            }
+            None => Vec::new(),
+        };
         let mut push = vec!["push", "-q"];
         if !has_upstream {
             push.extend(["-u", "origin", "HEAD"]);
@@ -131,6 +138,9 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
                 "Pushed {outgoing} commit{}",
                 if outgoing == 1 { "" } else { "s" }
             ));
+            if let Err(err) = crate::locks_cmd::after_push(&repo, &pushed) {
+                ui::warn(format!("could not update locks: {err:#}"));
+            }
             return Ok(0);
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -265,7 +275,36 @@ fn merge(
     }
     let _ = invocation;
     summarize(repo, &before, &names);
+    warn_about_my_locks(repo, &before);
     Ok(0)
+}
+
+/// Incoming changes that touched what I have locked (someone bypassed GANG).
+fn warn_about_my_locks(repo: &Repo, before: &str) {
+    let Ok(me) = presence::identity(repo).map(|i| i.login) else {
+        return;
+    };
+    let Ok(table) = gang_core::locks::read(repo) else {
+        return;
+    };
+    let mine: Vec<&gang_core::locks::Lock> = table.locks.iter().filter(|l| l.owner == me).collect();
+    if mine.is_empty() {
+        return;
+    }
+    let Ok(changed) = repo.run(["diff", "--name-only", "-z", before, "HEAD"]) else {
+        return;
+    };
+    for path in split_nul(&changed) {
+        if let Some(lock) = mine
+            .iter()
+            .find(|l| l.targets().any(|t| t.covers_file(&path)))
+        {
+            ui::warn(format!(
+                "Incoming changes touched {path}, which you have locked ({}).",
+                lock.root.label()
+            ));
+        }
+    }
 }
 
 /// "Merged automatically from mehmet:" with what changed in Unity files.

@@ -8,7 +8,7 @@ use clap::Parser;
 use gang_core::guards::{self, Allow, Severity};
 use gang_core::invocation::Invocation;
 use gang_core::repo::Repo;
-use gang_core::{git, safety, setup};
+use gang_core::{git, safety, semantic, setup};
 
 use crate::{ui, wrap};
 
@@ -121,7 +121,7 @@ pub fn hook(invocation: &Invocation) -> Result<i32> {
             }
             Ok(0)
         }
-        // pre-push: locks (P9).
+        "pre-push" => pre_push(),
         _ => Ok(0),
     }
 }
@@ -148,10 +148,148 @@ fn pre_commit() -> Result<i32> {
             eprintln!("  Fix: {fix}");
         }
     }
+
+    // Locks and the bake policy.
+    if gang_core::setup::is_gang_repo(&repo) {
+        let changes = guards::staged_changes(&repo)?;
+        let versions: Vec<(String, Option<String>, Option<String>)> = changes
+            .iter()
+            .map(|c| {
+                let unity = gang_core::attributes::is_unity_yaml(&c.path);
+                let old = unity
+                    .then(|| {
+                        semantic::blob(&repo, &format!("HEAD:{}", c.path))
+                            .ok()
+                            .flatten()
+                    })
+                    .flatten();
+                let new = (unity && !c.deletes())
+                    .then(|| {
+                        semantic::blob(&repo, &format!(":{}", c.path))
+                            .ok()
+                            .flatten()
+                    })
+                    .flatten();
+                (c.path.clone(), old, new)
+            })
+            .collect();
+        for hit in crate::locks_cmd::check_changes(&repo, false, &versions).unwrap_or_default() {
+            blocked = true;
+            eprintln!("✗ {}", hit.message());
+            match &hit.restore {
+                Some(target) => eprintln!(
+                    "  Fix: gang restore {target}  (undoes only that object), then add the file again"
+                ),
+                None => eprintln!(
+                    "  Fix: ask {} to unlock it, or `gang unlock --force` (the team is told)",
+                    hit.owner
+                ),
+            }
+        }
+        if gang_core::config::Config::load(repo.root())
+            .map(|c| c.scenes.lighting == "lock")
+            .unwrap_or(false)
+        {
+            let index: std::collections::BTreeSet<String> =
+                repo.tracked_files()?.into_iter().collect();
+            let me = gang_core::presence::identity(&repo)?.login;
+            let all = gang_core::locks::read(&repo)
+                .map(|t| t.locks)
+                .unwrap_or_default();
+            let mut scenes = std::collections::BTreeSet::new();
+            for change in &changes {
+                if let Some(scene) = gang_core::lock_check::bake_output_scene(&index, &change.path)
+                {
+                    if !gang_core::lock_check::holds_bake_lock(&all, &me, &scene) {
+                        scenes.insert(scene);
+                    }
+                }
+            }
+            for scene in scenes {
+                blocked = true;
+                eprintln!(
+                    "✗ {scene}: bake outputs need a bake lock (the project's lighting policy)"
+                );
+                eprintln!("  Fix: gang lock {scene} --bake");
+            }
+        }
+    }
+
     if blocked {
         eprintln!();
         eprintln!("Commit stopped by GANG. Fix the problems above and commit again.");
         return Ok(1);
     }
     Ok(0)
+}
+
+/// Checks everything being pushed against freshly fetched locks.
+fn pre_push() -> Result<i32> {
+    let Some(repo) = Repo::discover(&[])? else {
+        return Ok(0);
+    };
+    if !gang_core::setup::is_gang_repo(&repo) {
+        return Ok(0);
+    }
+    let mut input = String::new();
+    io::Read::read_to_string(&mut io::stdin(), &mut input)?;
+    let config = gang_core::config::Config::load(repo.root()).unwrap_or_default();
+    let zero = |sha: &str| sha.chars().all(|c| c == '0');
+    let mut versions = Vec::new();
+    for line in input.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let [_, local, _, remote] = parts.as_slice() else {
+            continue;
+        };
+        if zero(local) {
+            continue;
+        }
+        let base = if zero(remote) || repo.try_run(["cat-file", "-e", remote])?.is_none() {
+            match gang_core::presence::upstream(&repo, &config)? {
+                Some(upstream) => repo
+                    .try_run(["merge-base", local, &upstream])?
+                    .map(|b| b.trim().to_owned()),
+                None => None,
+            }
+        } else {
+            Some((*remote).to_owned())
+        };
+        let Some(base) = base else { continue };
+        let paths =
+            gang_core::repo::split_nul(&repo.run(["diff", "--name-only", "-z", &base, local])?);
+        for path in paths {
+            let unity = gang_core::attributes::is_unity_yaml(&path);
+            let old = unity
+                .then(|| {
+                    semantic::blob(&repo, &format!("{base}:{path}"))
+                        .ok()
+                        .flatten()
+                })
+                .flatten();
+            let new = unity
+                .then(|| {
+                    semantic::blob(&repo, &format!("{local}:{path}"))
+                        .ok()
+                        .flatten()
+                })
+                .flatten();
+            versions.push((path, old, new));
+        }
+    }
+    let hits = match crate::locks_cmd::check_changes(&repo, true, &versions) {
+        Ok(hits) => hits,
+        Err(err) => {
+            eprintln!("⚠ could not check locks: {err:#}");
+            return Ok(0);
+        }
+    };
+    if hits.is_empty() {
+        return Ok(0);
+    }
+    for hit in &hits {
+        eprintln!("✗ {}", hit.message());
+    }
+    eprintln!();
+    eprintln!("Push stopped by GANG: it changes locked files or objects.");
+    Ok(1)
 }

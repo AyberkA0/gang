@@ -51,6 +51,7 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
             let code = git_command(invocation, &invocation.args)?;
             if code == 0 && setup::is_gang_repo(&repo) {
                 let _ = gang_core::presence::fetch(&repo);
+                let _ = gang_core::locks::fetch(&repo);
             }
             Ok(code)
         }
@@ -90,6 +91,7 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
             }
             if name == "pull" && code == 0 && setup::is_gang_repo(&repo) {
                 let _ = gang_core::presence::fetch(&repo);
+                let _ = gang_core::locks::fetch(&repo);
             }
             offer_bang(&repo, code)
         }
@@ -646,7 +648,25 @@ fn push(invocation: &Invocation) -> Result<i32> {
             return Ok(1);
         }
     }
-    git_command(invocation, &args)
+    let repo = Repo::discover(&invocation.git_globals)?;
+    let pushed: Vec<String> = repo
+        .as_ref()
+        .and_then(|r| {
+            r.try_run(["diff", "--name-only", "-z", "@{upstream}", "HEAD"])
+                .ok()
+                .flatten()
+        })
+        .map(|names| gang_core::repo::split_nul(&names))
+        .unwrap_or_default();
+    let code = git_command(invocation, &args)?;
+    if code == 0 {
+        if let Some(repo) = repo.filter(setup::is_gang_repo) {
+            if let Err(err) = crate::locks_cmd::after_push(&repo, &pushed) {
+                ui::warn(format!("could not update locks: {err:#}"));
+            }
+        }
+    }
+    Ok(code)
 }
 
 fn current_branch_is_default() -> bool {

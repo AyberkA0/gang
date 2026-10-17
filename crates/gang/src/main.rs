@@ -1,6 +1,7 @@
 mod bang;
 mod help;
 mod ignore_cmd;
+mod locks_cmd;
 mod panel;
 mod plumbing;
 mod presence_cmd;
@@ -69,6 +70,9 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("tree") => semantic_cmd::tree(invocation),
         Some("bang") => bang::run(invocation),
         Some("sync") => sync_cmd::run(invocation),
+        Some("lock") => locks_cmd::lock(invocation),
+        Some("unlock") => locks_cmd::unlock(invocation),
+        Some("locks") => locks_cmd::list(invocation),
         Some("presence-publish") => presence_cmd::publish(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),

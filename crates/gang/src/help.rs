@@ -17,6 +17,9 @@ GANG commands:
   bang             Answer quick questions about merge conflicts
   undo             Undo the last save, reset, restore or clean
   who [path]       Who on the team is changing what
+  lock <target>    Lock files or objects (file::object, --level 0|1|2, --auto, --bake)
+  unlock <target>  Release locks
+  locks            Show the team's locks
   tree <file>      Show the objects of a scene or prefab
   ignore           Manage ignore rules shared by the team
   git <args>       Run plain git, without GANG's additions
@@ -58,6 +61,9 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         Some("tree") => crate::semantic_cmd::TreeArgs::command().print_help()?,
         Some("sync") => crate::sync_cmd::Args::command().print_help()?,
         Some("bang") => crate::bang::Args::command().print_help()?,
+        Some("lock") => crate::locks_cmd::LockArgs::command().print_help()?,
+        Some("unlock") => crate::locks_cmd::UnlockArgs::command().print_help()?,
+        Some("locks") => crate::locks_cmd::LocksArgs::command().print_help()?,
         Some(_) => {
             let args = invocation
                 .git_globals
