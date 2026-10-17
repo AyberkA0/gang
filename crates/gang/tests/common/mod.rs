@@ -110,7 +110,8 @@ impl Sandbox {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
-            .env_remove("GANG_DEBUG");
+            .env_remove("GANG_DEBUG")
+            .env("GANG_NO_PRESENCE", "1");
         command
     }
 

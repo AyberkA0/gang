@@ -220,6 +220,9 @@ fn after_clone(repo: &Repo) -> Result<()> {
         repo.run(["lfs", "pull"])?;
         ui::done("LFS files downloaded");
     }
+    if gang_core::presence::fetch(repo).is_ok() {
+        ui::done("team presence fetched");
+    }
     check_editor_versions(repo);
     Ok(())
 }

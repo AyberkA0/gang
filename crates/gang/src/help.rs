@@ -9,10 +9,12 @@ gang — version control for Unity teams, built on git
 Usage: gang [options] <command> [args]
 
 GANG commands:
+  (no command)     Open the team panel (inside a GANG repository)
   init             Set up a repository for GANG (or create one)
   clone <repo>     Clone a repository and set it up (owner/repo works)
   save [-m msg]    Add every change and commit it, after GANG's checks
   undo             Undo the last save, reset, restore or clean
+  who [path]       Who on the team is changing what
   ignore           Manage ignore rules shared by the team
   git <args>       Run plain git, without GANG's additions
   version          Show GANG, git and git-lfs versions

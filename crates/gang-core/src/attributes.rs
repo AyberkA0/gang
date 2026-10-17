@@ -111,6 +111,23 @@ fn any_case_extension(extension: &str) -> String {
     pattern
 }
 
+/// Whether the path is stored in Git LFS by the managed rules (and so cannot
+/// be merged).
+pub fn is_binary_path(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if name == "LightingData.asset" {
+        return true;
+    }
+    let extension = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    extension.is_some_and(|e| LFS.contains(&e.as_str()))
+}
+
+/// Whether the path is a Unity YAML asset GANG merges semantically.
+pub fn is_unity_yaml(path: &str) -> bool {
+    let extension = path.rsplit_once('.').map(|(_, e)| e);
+    extension.is_some_and(|e| UNITY_YAML.contains(&e))
+}
+
 /// The generated block.
 pub fn block() -> String {
     let unity = UNITY_YAML

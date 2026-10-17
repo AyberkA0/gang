@@ -116,14 +116,14 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** everyone sees, within seconds, who is changing which file.
 
-- [ ] Shared-ref writer (parentless commit + lease + retry with jitter) in `gang-core`, reused by locks.
-- [ ] Presence model with deterministic JSON; `seq` persisted in `.git/gang/state.json`.
-- [ ] Flag computation from status, upstream diff and stash; `since` tracking; clearing rules (DESIGN §9.2).
-- [ ] File watcher (`notify` + debouncer) with ignored folders; heartbeat; poller using `ls-remote` tip comparison.
-- [ ] Clock-skew detection from GitHub's `Date` header.
-- [ ] `gang who [path]`; teammates' flags in `gang status`; overlap warnings (yellow for Unity YAML, red for binary).
-- [ ] Notices (force unlock, history rewrite).
-- [ ] Team panel v1 (`ratatui`): team, my changes, locks, notices; keys to run `save`, `sync`, `bang`.
+- [x] Presence writer: parentless commit on the user's own ref, pushed with retries. (The lease-based shared writer comes with locks in P9.)
+- [x] Presence model with deterministic JSON; `seq` persisted in `.git/gang/state.json`.
+- [x] Flag computation from status, upstream diff and stash; `since` tracking; clearing rules (DESIGN §9.2).
+- [x] File watcher (`notify`, own debounce) with ignored folders; heartbeat; poller using `ls-remote` tip comparison. Outside the panel, every state-changing `gang` command and the post-commit/checkout/merge hooks publish in a detached background process.
+- [ ] Clock-skew detection from GitHub's `Date` header — needs the GitHub API client from P2.
+- [x] `gang who [path]`; teammates' flags in `gang status`; overlap warnings (yellow for Unity YAML, red for binary).
+- [ ] Notices (force unlock, history rewrite) — the field exists; filled in by P9.
+- [x] Team panel v1 (`ratatui`): team, my changes with overlap warnings; keys `q`, `r`, `s` (save). Locks, notices and the `sync`/`bang` keys are added with P8/P9.
 
 **Done when:** the multi-user harness runs 4 simulated users (4 clones of a local bare remote, then once against GitHub) changing files for 30 minutes: no lost updates, the presence ref always has exactly one commit, 95% of changes are visible to others within 20 s.
 

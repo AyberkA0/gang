@@ -34,6 +34,14 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
         ("reset", Some(repo)) => reset(invocation, &repo),
         ("clean", Some(repo)) => clean(invocation, &repo),
         ("push", _) => push(invocation),
+        ("status", repo) => crate::presence_cmd::status(invocation, repo.as_ref()),
+        ("fetch" | "pull", Some(repo)) => {
+            let code = git_command(invocation, &invocation.args)?;
+            if code == 0 && setup::is_gang_repo(&repo) {
+                let _ = gang_core::presence::fetch(&repo);
+            }
+            Ok(code)
+        }
         ("filter-branch" | "filter-repo", _) => rewrite_history(invocation),
         _ => git_command(invocation, &invocation.args),
     }

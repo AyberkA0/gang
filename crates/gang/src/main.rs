@@ -1,6 +1,8 @@
 mod help;
 mod ignore_cmd;
+mod panel;
 mod plumbing;
+mod presence_cmd;
 mod save_cmd;
 mod setup_cmd;
 mod ui;
@@ -21,6 +23,7 @@ fn main() {
             1
         }
     };
+    presence_cmd::after_command(&invocation);
     std::process::exit(code);
 }
 
@@ -35,6 +38,13 @@ fn run(invocation: &Invocation) -> Result<i32> {
     }
     if invocation.command.is_none() {
         if invocation.git_globals.is_empty() {
+            if ui::interactive() {
+                if let Some(repo) = gang_core::repo::Repo::discover(&[])? {
+                    if gang_core::setup::is_gang_repo(&repo) {
+                        return panel::run(repo);
+                    }
+                }
+            }
             help::print_main();
             return Ok(0);
         }
@@ -52,6 +62,8 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("hook") => save_cmd::hook(invocation),
         Some("save") => save_cmd::save(invocation),
         Some("undo") => save_cmd::undo(invocation),
+        Some("who") => presence_cmd::who(invocation),
+        Some("presence-publish") => presence_cmd::publish(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),
             None => wrapped(invocation, "config", &[]),

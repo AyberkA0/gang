@@ -93,6 +93,34 @@ impl Repo {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
+    /// Runs git with `input` on stdin and returns stdout.
+    pub fn run_with_input<I, S>(&self, args: I, input: &[u8]) -> Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        use std::io::Write;
+        let args: Vec<OsString> = args.into_iter().map(|a| a.as_ref().to_owned()).collect();
+        let mut child = self
+            .command()
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("could not run git {}", display_args(&args)))?;
+        child.stdin.take().context("no stdin")?.write_all(input)?;
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            bail!(
+                "git {} failed: {}",
+                display_args(&args),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     /// Runs git; `None` when git exits with an error.
     pub fn try_run<I, S>(&self, args: I) -> Result<Option<String>>
     where

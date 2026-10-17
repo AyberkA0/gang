@@ -115,7 +115,13 @@ pub fn hook(invocation: &Invocation) -> Result<i32> {
         .unwrap_or_default();
     match name.as_str() {
         "pre-commit" => pre_commit(),
-        // pre-push (locks, P9), post-checkout/commit/merge (presence, P5).
+        "post-commit" | "post-checkout" | "post-merge" => {
+            if let Some(repo) = Repo::discover(&[])? {
+                crate::presence_cmd::spawn_publish(&repo);
+            }
+            Ok(0)
+        }
+        // pre-push: locks (P9).
         _ => Ok(0),
     }
 }
