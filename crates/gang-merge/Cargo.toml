@@ -1,0 +1,11 @@
+[package]
+name = "gang-merge"
+description = "Semantic diff and 3-way merge for Unity scenes, prefabs and assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

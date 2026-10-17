@@ -1,0 +1,15 @@
+[package]
+name = "gang-core"
+description = "Git runner, command routing and shared state for GANG"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ctrlc.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

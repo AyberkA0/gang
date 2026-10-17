@@ -161,7 +161,7 @@ Consequences:
 
 Before any command that needs the network, and when the panel starts, GANG runs these checks in order:
 
-1. **git** is installed, at least the minimum supported version (to be fixed in P1), and **git-lfs** is installed. Otherwise: print install instructions for the current OS.
+1. **git** is installed, at least version **2.34**, and **git-lfs** is installed. Otherwise: print install instructions for the current OS.
 2. **A token exists** in the OS keychain and is valid (`GET /user`).
 3. **Otherwise, GitHub Device Flow:**
    1. `POST https://github.com/login/device/code` with GANG's `client_id` and scopes `repo read:user`.
@@ -275,7 +275,7 @@ Everything else goes straight to git, including `am`, `apply`, `archive`, `bundl
 ### 8.6 Implementation rules
 
 - Wrapped commands **do not redefine git's flags**. Arguments are captured raw (`trailing_var_arg`, `allow_hyphen_values`); GANG only sniffs the flags it cares about (`--hard`, `--force`, `-x`, …) and forwards the **original** arguments. The only rewrite is `--force` → `--force-with-lease`.
-- Unknown subcommands arrive through clap's `allow_external_subcommands` and are forwarded to git.
+- The top level is routed by hand, not by clap: GANG's options and git's global options are split off, then the command goes to a GANG command (whose own arguments clap parses), a wrapped git command, or straight to git.
 - stdin, stdout and stderr are inherited, so pagers, editors, `rebase -i` and `add -p` work. Git's exit code is returned unchanged.
 - GANG commands take precedence over git aliases with the same name; `gang init` warns about such aliases.
 
@@ -1059,7 +1059,8 @@ editor_open = "block"                 # block | warn
 - English only.
 - Symbols: `✓` done, `✗` blocked/failed, `⚠` warning, `🔒` / `🔓` lock taken/released, `●` online, `○` offline.
 - Colors through crossterm; `NO_COLOR` respected.
-- Global flags: `--raw` (git's output), `--json` (machine output for `status`, `who`, `locks`, `tree`), `--yes` (accept confirmations).
+- Global flags: `--raw` (git's output), `--json` (machine output for `status`, `who`, `locks`, `tree`), `--yes` (accept confirmations). They go **before** the command (`gang --raw log`): everything after the command belongs to it, so `gang log --raw` is git's own `--raw`. git's global options (`-C`, `-c`, `--no-pager`, …) are accepted in the same position and passed to git.
+- `GANG_DEBUG=1` prints how each command was routed (GANG command, wrapped with which layers, or passthrough).
 - Exit codes: passthrough returns git's code. GANG commands: `0` success, `1` conflicts or blocked by a check, `2` usage error, `3` auth or network error.
 - Every block message says what to do next.
 

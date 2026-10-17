@@ -28,8 +28,8 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** a building, tested workspace on all three OSes, and answers to the open technical questions before code depends on them.
 
-- [ ] Cargo workspace with `gang`, `gang-core`, `unity-yaml`, `gang-merge`, `gang-csharp`; `rust-toolchain.toml`; rustfmt and clippy settings.
-- [ ] GitHub Actions: macOS, Windows, Linux × (fmt, clippy `-D warnings`, test).
+- [x] Cargo workspace with `gang`, `gang-core`, `unity-yaml`, `gang-merge`, `gang-csharp`; `rust-toolchain.toml`; rustfmt and clippy settings.
+- [x] GitHub Actions: macOS, Windows, Linux × (fmt, clippy `-D warnings`, test).
 - [ ] **Spike S1 — shared refs on GitHub:** on a throwaway GitHub repository, push parentless commits to `refs/gang/locks` and to branch `gang-presence` with `--force-with-lease`; 4 parallel writers for 10 minutes; confirm no lost updates and that `[skip ci]` suppresses workflows. Record the result in DESIGN §6.1 (keep custom ref or fall back to a branch).
 - [ ] **Spike S2 — Unity YAML corpus:** collect scenes, prefabs and assets from our own project and public Unity sample projects (2022.3 and Unity 6). Write a throwaway document indexer. In Unity, add objects to a scene and record **where new documents are inserted** (end of file vs. fileID order) — needed for DESIGN §13.7.
 - [ ] **Spike S3 — OAuth Device Flow:** register the "GANG" OAuth App with Device Flow enabled; minimal login that prints the user's login.
@@ -44,16 +44,20 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** `gang <anything>` behaves exactly like `git <anything>`.
 
-- [ ] clap root with `allow_external_subcommands`; unknown commands spawn `git` with inherited stdio.
-- [ ] Exit-code propagation (including termination by signal).
-- [ ] Middleware framework: a `Layer` trait with `before` / `after` hooks; a registry mapping each wrapped command to its layers (DESIGN §8.1, §8.3).
-- [ ] Raw argument capture for wrapped commands; flag-sniffing helper.
-- [ ] Global flags and modes: TTY detection, `NO_COLOR`, `--raw`, `--json`, `--yes`.
-- [ ] Git runner: spawn and capture helpers, `-z` output parsers, error mapping.
-- [ ] Minimum git version and git-lfs checks; decide the minimum git version.
-- [ ] `gang git`, `gang version`, `gang help` (+ `help <git-command>`).
+- [x] Top-level routing: GANG options and git's global options (`-C`, `-c`, `--no-pager`, …) are split off by hand; the command is then routed to a GANG command (parsed with clap), a wrapped git command, or passthrough. git runs with inherited stdio and GANG ignores Ctrl+C while it waits.
+- [x] Exit-code propagation (including termination by signal).
+- [x] Layer registry mapping each wrapped command to its layers (DESIGN §8.1, §8.3).
+- [ ] Layer `before` / `after` hooks and the flag-sniffing helper — added with the first real layer (P3/P4).
+- [x] `--raw` and `--json` parsed; GANG options go before the command (`gang --raw log`), since `gang log --raw` is git's flag.
+- [ ] TTY detection, `NO_COLOR`, `--yes` — added with the first output or prompt that needs them.
+- [x] Git runner: inherited runs, version detection, error mapping with per-OS install hints.
+- [ ] Capture helpers and `-z` output parsers — added with P4/P5.
+- [x] Minimum git version decided: **2.34** (Ubuntu 22.04's git; Apple's bundled git passes). git-lfs is reported by `gang version` and enforced in P3.
+- [x] `gang git`, `gang version [--json]`, `gang help` (+ `help <git-command>`). `GANG_DEBUG=1` prints how a command was routed.
 
 **Done when:** a passthrough test suite runs ~30 representative git commands through `gang` and through `git` in temporary repositories and gets identical output and exit codes; `rebase -i`, `add -p`, pager and editor work (manual check on 3 OSes).
+
+> Status: the automated part is done (`crates/gang/tests/passthrough.rs`, 40 cases). The manual interactive check is still open.
 
 ---
 

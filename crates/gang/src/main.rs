@@ -1,0 +1,102 @@
+mod help;
+mod version;
+
+use anyhow::Result;
+use gang_core::commands;
+use gang_core::git::{self, GitError};
+use gang_core::invocation::Invocation;
+
+fn main() {
+    let invocation = Invocation::parse(std::env::args_os().skip(1));
+    let code = match run(&invocation) {
+        Ok(code) => code,
+        Err(err) => {
+            report(&err);
+            1
+        }
+    };
+    std::process::exit(code);
+}
+
+fn run(invocation: &Invocation) -> Result<i32> {
+    if invocation.options.help {
+        help::print_main();
+        return Ok(0);
+    }
+    if invocation.options.version {
+        println!("gang {}", env!("CARGO_PKG_VERSION"));
+        return Ok(0);
+    }
+    if invocation.command.is_none() {
+        if invocation.git_globals.is_empty() {
+            help::print_main();
+            return Ok(0);
+        }
+        return passthrough(invocation);
+    }
+
+    match invocation.command_name() {
+        Some("git") => plain_git(invocation),
+        Some("version") => version::run(invocation),
+        Some("help") => help::run(invocation),
+        Some(name) => match commands::wrapped_layers(name) {
+            Some(layers) => wrapped(invocation, name, layers),
+            None => passthrough(invocation),
+        },
+        None => passthrough(invocation),
+    }
+}
+
+/// A git command GANG wraps. Its layers are attached as they are implemented
+/// (PLAN.md); until then it runs exactly like git.
+fn wrapped(invocation: &Invocation, name: &str, layers: &[commands::Layer]) -> Result<i32> {
+    git::ensure_supported()?;
+    debug(|| format!("wrapped `{name}`, layers {layers:?}"));
+    Ok(git::run_inherited(invocation.git_args())?)
+}
+
+/// A command GANG does not know: git runs it unchanged.
+fn passthrough(invocation: &Invocation) -> Result<i32> {
+    debug(|| "passed to git".to_owned());
+    Ok(git::run_inherited(invocation.git_args())?)
+}
+
+/// `gang git <args>`: plain git, without any GANG layers.
+fn plain_git(invocation: &Invocation) -> Result<i32> {
+    let args = invocation.git_globals.iter().chain(&invocation.args);
+    Ok(git::run_inherited(args)?)
+}
+
+/// Prints a routing trace to stderr when `GANG_DEBUG` is set.
+fn debug(message: impl FnOnce() -> String) {
+    if std::env::var_os("GANG_DEBUG").is_some() {
+        eprintln!("gang: {}", message());
+    }
+}
+
+fn report(err: &anyhow::Error) {
+    eprintln!("✗ {err}");
+    if let Some(hint) = err.downcast_ref::<GitError>().and_then(hint) {
+        eprintln!("  {hint}");
+    }
+}
+
+fn hint(err: &GitError) -> Option<&'static str> {
+    match err {
+        GitError::NotFound => Some(install_git_hint()),
+        GitError::TooOld { .. } => {
+            Some("Update git from https://git-scm.com/downloads and try again.")
+        }
+        GitError::UnknownVersion(_) | GitError::Io(_) => None,
+    }
+}
+
+fn install_git_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "GANG runs git under the hood. Install it with `xcode-select --install` or `brew install git`."
+    } else if cfg!(windows) {
+        "GANG runs git under the hood. Install it with `winget install --id Git.Git -e` or from https://git-scm.com/downloads."
+    } else {
+        "GANG runs git under the hood. Install it with your package manager, e.g. `sudo apt install git`."
+    }
+}

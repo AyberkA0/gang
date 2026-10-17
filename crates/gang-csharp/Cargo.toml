@@ -1,0 +1,11 @@
+[package]
+name = "gang-csharp"
+description = "C# type index used for lock levels and layer remapping"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
