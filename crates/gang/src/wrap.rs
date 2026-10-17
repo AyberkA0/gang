@@ -175,6 +175,8 @@ fn changes_files(name: &str, args: &[OsString]) -> bool {
             Some("log" | "visualize" | "view" | "terms" | "help")
         ),
         "reset" => has(&args, &["--hard", "--merge", "--keep"]),
+        // Restoring one object only warns (DESIGN.md §18.3).
+        "restore" if args.iter().any(|a| a.contains("::")) => false,
         "restore" => !has(&args, &["--staged", "-S"]) || has(&args, &["--worktree", "-W"]),
         _ => true,
     }

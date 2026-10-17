@@ -235,10 +235,10 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 ### P12 · Distribution and docs — S
 
-- [ ] `cargo-dist`: macOS (arm64, x64), Windows x64, Linux (x64, arm64); GitHub Releases.
-- [ ] Installers: shell script, PowerShell script, Homebrew tap, Scoop bucket.
-- [ ] Update notice (no self-update).
-- [ ] README, command reference generated from clap, WORKFLOW.md kept in sync with the real output, troubleshooting guide.
+- [x] Release workflow (`.github/workflows/release.yml`, no cargo-dist needed): macOS (arm64, x64), Windows x64, Linux (x64, arm64); GitHub Releases on a `v*` tag; the OAuth client ID comes from a repository secret.
+- [x] Installers: `install.sh`, `install.ps1`. Homebrew tap and Scoop bucket need their own repositories — still open.
+- [ ] Update notice (no self-update) — still open.
+- [x] README, command reference (`docs/COMMANDS.md`, from `gang help`), WORKFLOW.md matched to the real output. A troubleshooting guide is still open.
 
 **Done when:** a new teammate on each OS installs GANG and joins the test project using only the README.
 

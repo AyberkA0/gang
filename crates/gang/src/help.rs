@@ -57,6 +57,12 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
     match invocation.args.first().and_then(|arg| arg.to_str()) {
         None | Some("help") => print_main(),
         Some("git") => println!("{GIT_HELP}"),
+        Some("undo") => println!(
+            "Undo the last GANG operation\n\nUsage: gang undo\n\nUndoes the last `gang save` (the changes stay staged; refused once pushed),\nor brings back the files from before the last reset --hard, restore or clean."
+        ),
+        Some("who") => println!(
+            "Who on the team is changing what\n\nUsage: gang [--json] who [path]\n\nWith a path, lists everyone changing that file or folder."
+        ),
         Some("version") => crate::version::Args::command().print_help()?,
         Some("ignore") => crate::ignore_cmd::Args::command().print_help()?,
         Some("save") => crate::save_cmd::SaveArgs::command().print_help()?,

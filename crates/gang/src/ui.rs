@@ -33,3 +33,26 @@ pub fn warn(message: impl AsRef<str>) {
 pub fn hint(message: impl AsRef<str>) {
     eprintln!("  {}", message.as_ref());
 }
+
+/// Whether output may use colors: a terminal, and `NO_COLOR` not set.
+pub fn colors() -> bool {
+    std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal()
+}
+
+/// Bold text, when colors are allowed.
+pub fn bold(text: impl AsRef<str>) -> String {
+    if colors() {
+        format!("\x1b[1m{}\x1b[0m", text.as_ref())
+    } else {
+        text.as_ref().to_owned()
+    }
+}
+
+/// Yellow text, when colors are allowed.
+pub fn yellow(text: impl AsRef<str>) -> String {
+    if colors() {
+        format!("\x1b[33m{}\x1b[0m", text.as_ref())
+    } else {
+        text.as_ref().to_owned()
+    }
+}

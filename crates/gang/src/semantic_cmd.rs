@@ -314,7 +314,7 @@ fn print_semantic(
     let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
     for path in files {
         let (old, new) = versions(path)?;
-        println!("\x1b[1m{path}\x1b[0m");
+        println!("{}", ui::bold(path));
         match file_lines(old.as_deref(), new.as_deref(), &guids, &rules) {
             Some(lines) if lines.is_empty() => println!("  (no changes)"),
             Some(lines) => {
@@ -403,7 +403,7 @@ pub fn log(invocation: &Invocation, repo: &Repo) -> Result<Option<i32>> {
     let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
     for commit in commits.lines() {
         let header = repo.run(["log", "-1", "--format=%h  %an, %ar  %s", commit])?;
-        println!("\x1b[33m{}\x1b[0m", header.trim());
+        println!("{}", ui::yellow(header.trim()));
         let parent = repo
             .try_run(["rev-parse", "-q", "--verify", &format!("{commit}^")])?
             .map(|p| p.trim().to_owned());
@@ -494,11 +494,20 @@ pub fn restore_object(
         return Ok(0);
     }
     std::fs::write(repo.root().join(&path), current.to_text())?;
+    let unity_open = gang_core::unity::find_projects(repo.root())
+        .iter()
+        .any(|p| gang_core::unity::is_editor_open(&p.path(repo.root())));
     ui::done(format!(
         "Restored {} › {object} ({count} change{}). Your other changes in {path} are kept.",
         path.rsplit('/').next().unwrap_or(&path),
         if count == 1 { "" } else { "s" }
     ));
+    if unity_open {
+        ui::warn(format!(
+            "Unity is open: let it reload {} before you keep editing.",
+            path.rsplit('/').next().unwrap_or(&path)
+        ));
+    }
     Ok(0)
 }
 

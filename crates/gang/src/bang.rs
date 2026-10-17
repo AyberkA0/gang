@@ -247,7 +247,10 @@ enum Step {
 fn ask(file: &Pending, q: &Question, n: usize, total: usize) -> Result<Step> {
     let theirs = file.theirs_name.as_str();
     println!();
-    println!("\x1b[1m{} · conflict {n}/{total}\x1b[0m", short(&file.path));
+    println!(
+        "{}",
+        ui::bold(format!("{} · conflict {n}/{total}", short(&file.path)))
+    );
     println!("{}", "─".repeat(58));
     println!("{}", q.place);
     println!();
@@ -473,9 +476,12 @@ fn resolve_plain_file(
                     None => {
                         println!();
                         println!(
-                            "\x1b[1m{} · conflict {n}/{total} · hunk {}\x1b[0m",
-                            short(path),
-                            i / 2 + 1
+                            "{}",
+                            ui::bold(format!(
+                                "{} · conflict {n}/{total} · hunk {}",
+                                short(path),
+                                i / 2 + 1
+                            ))
                         );
                         println!("{}", "─".repeat(58));
                         println!("you:\n{}", indent(ours));
@@ -525,7 +531,10 @@ fn resolve_binary(
         Some(_) => "--theirs",
         None => {
             println!();
-            println!("\x1b[1m{} · conflict {n}/{total}\x1b[0m", short(path));
+            println!(
+                "{}",
+                ui::bold(format!("{} · conflict {n}/{total}", short(path)))
+            );
             println!("{}", "─".repeat(58));
             println!("{path} cannot be merged: you and the other side both changed it.");
             println!("[m] mine   [t] theirs   [a] save theirs next to it to compare   [q] quit");

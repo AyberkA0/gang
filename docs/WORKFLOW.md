@@ -40,10 +40,13 @@ No GitHub credentials found.
   Open https://github.com/login/device and enter the code.
   Waiting for authorization... ✓ Logged in as deniz
 
-Cloning AyberkA0/forest-run...           ✓
-Fetching LFS objects (1.2 GB)...         ✓
-Registering merge drivers and hooks...   ✓
-Fetching team presence and locks...      ✓
+Cloning into 'forest-run'...
+✓ merge drivers registered
+✓ GitHub sign-in connected to git
+✓ hooks installed (pre-commit, pre-push, post-checkout, post-commit, post-merge)
+✓ Git LFS enabled
+✓ LFS files downloaded
+✓ team presence fetched
 
 Unity version: the project uses 6000.0.23f1
   ✗ Not installed on this machine (found 6000.0.19f1)
@@ -165,14 +168,18 @@ While placing the new enemies, Mehmet accidentally drags Player. `gang status` c
 
 ```
 > gang status
-On main · up to date with origin/main
-Changes:
-  M Assets/Scenes/Level1.unity
-    ⚠ Player is locked by ayberk ("player rework") — you changed Player › Transform › Position
-      Undo only that object: gang restore Assets/Scenes/Level1.unity::Player
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+        modified:   Assets/Scenes/Level1.unity
+
+Locks:
+  ⚠ Level1.unity › Player is locked by ayberk ("player rework", 1 h ago) — you changed Player › Transform › Position.x
+    Undo only that object: gang restore Assets/Scenes/Level1.unity::Player
 
 > gang restore Assets/Scenes/Level1.unity::Player
-✓ Restored Level1.unity › Player (1 change). Your other changes in Level1.unity are kept.
+✓ Restored Level1.unity › Player (1 change). Your other changes in Assets/Scenes/Level1.unity are kept.
 ⚠ Unity is open: let it reload Level1 before you keep editing.
 ```
 
@@ -182,8 +189,7 @@ Changes:
 
 ```
 > gang save -m "Add forest section and two enemies"
-✓ Checks passed (meta files, file names, Unity version, locks)
-✓ Committed 3 files
+✓ Saved 3f2a9c1 Add forest section and two enemies
 
 > gang sync
 ✓ Up to date with origin/main
@@ -196,8 +202,7 @@ Changes:
 
 ```
 $ gang save -m "Tune jump"
-✓ Checks passed (meta files, file names, Unity version, locks)
-✓ Committed 1 file
+✓ Saved 8b1d204 Tune jump
 
 $ gang sync
 Pulling 1 commit from mehmet...
@@ -245,11 +250,10 @@ $ gang save -m "Main menu prefab"
   Fix: gang mv Assets/Ui/MainMenu.prefab Assets/UI/MainMenu.prefab
 
 $ gang mv Assets/Ui/MainMenu.prefab Assets/UI/MainMenu.prefab
-✓ Moved Assets/Ui/MainMenu.prefab → Assets/UI/MainMenu.prefab (+ .meta)
+✓ Assets/Ui/MainMenu.prefab.meta → Assets/UI/MainMenu.prefab.meta
 
 $ gang save -m "Main menu prefab"
-✓ Checks passed (meta files, file names, Unity version, locks)
-✓ Committed 2 files
+✓ Saved 7c4e0a2 Main menu prefab
 ```
 
 Meanwhile, the `.directory` files Deniz's desktop environment drops into folders never show up anywhere: the managed `.gitignore` already covers Linux, macOS and Windows junk.
@@ -262,17 +266,16 @@ At 11:02, Ayberk named layer 8 `Pickup` and pushed. Not knowing that, Deniz name
 
 ```
 $ gang sync
-Layer conflict on layer 8: yours "UI3D", origin/main "Pickup" (ayberk, 11:02)
-  → Moving "UI3D" to layer 9 and updating everything that uses it:
-    ✓ ProjectSettings/TagManager.asset          layer 8 → 9
-    ✓ ProjectSettings/DynamicsManager.asset     collision matrix row/column 8 → 9
-    ✓ Assets/Prefabs/UI/MainMenu.prefab         3 objects (Layer)
-    ✓ Assets/Scenes/Menu.unity                  UI Camera culling mask
-    ✓ Assets/Scripts/UI/MenuCamera.cs:42        1 << 8  →  1 << 9
-    ⚠ Assets/Scripts/UI/MenuRaycaster.cs:17     literal 8 next to "layer" — please review
-  ✓ Committed "gang: move layer UI3D from 8 to 9"
-Pulling 2 commits from ayberk...
-  ✓ Merged without conflicts
+Layer conflict: Layer 8 is "Pickup" on origin/main (ayberk).
+  → Moving "UI3D" to layer 9 and updating what your commits used it for:
+    ✓ ProjectSettings/TagManager.asset: layer 8 → 9
+    ✓ Assets/Prefabs/UI/MainMenu.prefab: 3 objects (Layer)
+    ✓ Assets/Scenes/Menu.unity: 1 layer mask
+    ✓ Assets/Scripts/UI/MenuCamera.cs:42
+    ⚠ ProjectSettings/DynamicsManager.asset: check the collision matrix for the moved layer — please review
+    ⚠ Assets/Scripts/UI/MenuRaycaster.cs:17: the number 8 next to "layer" — please review
+✓ Committed "gang: move layer UI3D from 8 to 9"
+Pulling 2 commits from ayberk…
 ✓ Pushed 3 commits
 ```
 
@@ -282,18 +285,17 @@ No question was asked. Whoever pushed first keeps the index; GANG moved Deniz's 
 $ gang log -1 --format=%B HEAD^1
 gang: move layer UI3D from 8 to 9
 
-Layer 8 is "Pickup" on origin/main (ayberk, 11:02), so "UI3D" moved to
-the first free layer.
+Layer 8 is "Pickup" on origin/main (ayberk), so "UI3D" moved to layer 9.
 
 Updated:
-- ProjectSettings/TagManager.asset
-- ProjectSettings/DynamicsManager.asset (collision matrix)
-- Assets/Prefabs/UI/MainMenu.prefab (3 objects)
-- Assets/Scenes/Menu.unity (UI Camera culling mask)
+- ProjectSettings/TagManager.asset: layer 8 → 9
+- Assets/Prefabs/UI/MainMenu.prefab: 3 objects (Layer)
+- Assets/Scenes/Menu.unity: 1 layer mask
 - Assets/Scripts/UI/MenuCamera.cs:42
 
 Needs review:
-- Assets/Scripts/UI/MenuRaycaster.cs:17
+- ProjectSettings/DynamicsManager.asset: check the collision matrix for the moved layer
+- Assets/Scripts/UI/MenuRaycaster.cs:17: the number 8 next to "layer"
 
 Gang-Remap: layer 8 -> 9
 ```
@@ -324,7 +326,7 @@ Ayberk keeps working on Player in Level1 without interruption — only the bake 
     Assets/Scenes/Level1.unity
     Assets/Prefabs/Hero.prefab
   Save your work and close Unity, then run `gang sync` again.
-  (Use --force to sync anyway.)
+  (Use `gang --ignore-editor sync` to sync anyway.)
 ```
 
 Zeynep saves, closes Unity and syncs again without trouble. Without this check, pressing Ctrl+S in an editor still holding the old Level1 would have overwritten the morning's merged work by Ayberk and Mehmet.
@@ -335,8 +337,7 @@ Zeynep saves, closes Unity and syncs again without trouble. Without this check, 
 
 ```
 > gang save -m "Hero armor repaint" --push
-✓ Checks passed (meta files, file names, Unity version, locks)
-✓ Committed 2 files (Hero.psd via LFS, 48 MB)
+✓ Saved 51c0e7a Hero armor repaint
 ✓ Pushed 1 commit
 
 You pushed changes to a locked file: Assets/Art/Characters/Hero.psd
@@ -373,8 +374,7 @@ At 15:20 Deniz spots a typo in `Pickup.cs`, fixes it and pushes. Nothing stops D
 
 ```
 $ gang save -m "Coin pickups and player rework"
-✓ Checks passed (meta files, file names, Unity version, locks)
-✓ Committed 6 files
+✓ Saved 9d3e112 Coin pickups and player rework
 
 $ gang sync
 Pulling 2 commits from deniz, mehmet...
@@ -428,13 +428,18 @@ Ayberk opened Level3 earlier just to look at it:
 
 ```
 $ gang status
-On main · up to date with origin/main
-Changes:
-  M Assets/Scenes/Level3.unity   noise only (RenderSettings, 2 RectTransforms)
-Run `gang restore --noise` to discard noise-only changes.
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+        modified:   Assets/Scenes/Level3.unity
+
+Unity:
+  Assets/Scenes/Level3.unity: only noise
+  Run `gang restore --noise` to drop noise-only changes.
 
 $ gang restore --noise
-✓ Restored 1 file
+✓ restored Assets/Scenes/Level3.unity (noise only)
 ```
 
 A last look at the panel before leaving:
