@@ -444,8 +444,17 @@ fn mv(invocation: &Invocation, repo: &Repo) -> Result<i32> {
         if has(&args, &["-v", "--verbose"]) || from.ends_with(".meta") && !sources.contains(from) {
             ui::done(format!("{from} → {to}"));
         }
+        if from.ends_with(".unity") && file_name(from) != file_name(to) {
+            for place in crate::doctor_cmd::scene_name_references(repo, from) {
+                ui::warn(format!("{place} still loads the scene by its old name"));
+            }
+        }
     }
     Ok(0)
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 /// `gang restore` / `gang checkout -- <paths>`: restores `.meta` files with

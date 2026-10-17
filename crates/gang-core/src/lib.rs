@@ -5,6 +5,7 @@ pub mod attributes;
 pub mod clock;
 pub mod commands;
 pub mod config;
+pub mod doctor;
 pub mod git;
 pub mod guards;
 pub mod ignore;

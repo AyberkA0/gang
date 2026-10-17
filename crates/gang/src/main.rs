@@ -1,4 +1,5 @@
 mod bang;
+mod doctor_cmd;
 mod help;
 mod ignore_cmd;
 mod locks_cmd;
@@ -73,6 +74,7 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("lock") => locks_cmd::lock(invocation),
         Some("unlock") => locks_cmd::unlock(invocation),
         Some("locks") => locks_cmd::list(invocation),
+        Some("doctor") => doctor_cmd::run(invocation),
         Some("presence-publish") => presence_cmd::publish(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),

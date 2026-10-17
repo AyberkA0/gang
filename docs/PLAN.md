@@ -221,11 +221,11 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 ### P11 · Doctor and integrity — S
 
-- [ ] Cross-file reference integrity (missing GUIDs, missing prefab sources, missing override targets).
-- [ ] Scene rename → string references in code; Build Settings consistency.
-- [ ] Hotspots from history (scenes and root objects that conflict most) with suggestions.
-- [ ] GitHub Actions workflows that would run on GANG refs; branch protection hints.
-- [ ] `gang doctor --fix` for the safe fixes.
+- [x] Cross-file reference integrity: missing assets and prefab sources (package assets are checked once Unity has filled `Library/PackageCache`). Missing override targets are still open.
+- [x] Scene rename → string references in code (warned by `gang mv`); Build Settings consistency.
+- [x] Hotspots from history (scenes and prefabs changed on both sides of recent merges) with suggestions.
+- [x] Not needed: spike S1 showed GANG's refs never start workflow runs.
+- [x] `gang doctor [--fix] [--json]` for the safe fixes (drivers and hooks, Unity settings, tracked junk, orphan metas). Also checks metas, GUIDs, LFS and the installed Unity version.
 
 **Done when:** a seeded test project produces the expected report.
 

@@ -40,6 +40,24 @@ impl GuidIndex {
         index
     }
 
+    /// Scans every `.meta` below a folder (for example one package in
+    /// `Library/PackageCache`).
+    pub fn scan_folder(folder: &Path, base: &Path) -> GuidIndex {
+        let mut index = GuidIndex::default();
+        walk(folder, &mut |meta| {
+            if let Some(guid) = read_guid(meta) {
+                let asset = meta.with_extension("");
+                let relative = asset
+                    .strip_prefix(base)
+                    .unwrap_or(&asset)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                index.paths.entry(guid).or_insert(relative);
+            }
+        });
+        index
+    }
+
     /// Adds another project's assets.
     pub fn extend(&mut self, other: GuidIndex) {
         self.duplicates.extend(other.duplicates);
