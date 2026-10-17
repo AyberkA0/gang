@@ -79,15 +79,15 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** `gang init` / `gang clone` give every machine the same correct setup.
 
-- [ ] Unity project detection: `ProjectSettings/ProjectVersion.txt`, project in a subfolder, several projects in one repository.
-- [ ] `EditorSettings.asset` check and fix (Force Text, Visible Meta Files).
-- [ ] Managed `.gitignore`: embedded rules, project detection, deterministic output, project-rules section, migration of an existing `.gitignore`.
-- [ ] `gang ignore add [--local] | update | check | doctor`.
-- [ ] Managed `.gitattributes`: line endings, `merge=gang`, LFS families, `LightingData.asset` rule.
-- [ ] `gang-ignore` merge driver for `.gitignore` / `.gitattributes` (regenerate managed block, sorted union of project rules).
-- [ ] `.gang/config.toml` schema, loader, precedence (DESIGN §19); `gang config --project`.
-- [ ] Merge driver and hook registration; hook shims in `.git/hooks/` call `gang hook <name>` and chain existing hooks.
-- [ ] `gang init` (+ `--github` to create the repository), `gang clone` (`owner/repo`, LFS, presence and locks fetch, Unity version check).
+- [x] Unity project detection: `ProjectSettings/ProjectVersion.txt`, project in a subfolder, several projects in one repository.
+- [x] `EditorSettings.asset` check and fix (Force Text, Visible Meta Files).
+- [x] Managed `.gitignore`: embedded rules, project detection, deterministic output, project-rules section, migration of an existing `.gitignore`.
+- [x] `gang ignore add [--local] | update | check | doctor [--fix]`.
+- [x] Managed `.gitattributes`: line endings, `merge=gang`, LFS families, `LightingData.asset` rule.
+- [x] `gang-ignore` merge driver for `.gitignore` / `.gitattributes` (regenerate managed block, sorted union of project rules).
+- [x] `.gang/config.toml` schema, loader, precedence (DESIGN §19); `gang config --project`.
+- [x] Merge driver and hook registration; hook shims in `.git/hooks/` call `gang hook <name>` and chain existing hooks. The shims also run Git LFS's hooks, so LFS is installed with `--skip-repo`. A repository cloned with plain git is set up by the next wrapped `gang` command.
+- [x] `gang init`, `gang clone` (`owner/repo`, LFS, presence and locks fetch, Unity version check). `gang init --github` waits for P2 (auth); presence/lock fetch is wired in P5.
 
 **Done when:** running `gang init` on the same messy test project on macOS, Windows and Linux produces byte-identical `.gitignore`, `.gitattributes` and `config.toml` (compared in CI); `gang ignore doctor` finds every seeded problem.
 

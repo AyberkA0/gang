@@ -1,6 +1,13 @@
-//! Core of GANG: running git, routing commands, and (in later phases) auth,
-//! presence, locks and guards.
+//! Core of GANG: running git, routing commands, project setup, and (in later
+//! phases) auth, presence, locks and guards.
 
+pub mod attributes;
 pub mod commands;
+pub mod config;
 pub mod git;
+pub mod ignore;
 pub mod invocation;
+pub mod managed;
+pub mod repo;
+pub mod setup;
+pub mod unity;

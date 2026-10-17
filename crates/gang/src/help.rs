@@ -9,6 +9,9 @@ gang — version control for Unity teams, built on git
 Usage: gang [options] <command> [args]
 
 GANG commands:
+  init             Set up a repository for GANG (or create one)
+  clone <repo>     Clone a repository and set it up (owner/repo works)
+  ignore           Manage ignore rules shared by the team
   git <args>       Run plain git, without GANG's additions
   version          Show GANG, git and git-lfs versions
   help [command]   Show help for a GANG or git command
@@ -42,6 +45,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         None | Some("help") => print_main(),
         Some("git") => println!("{GIT_HELP}"),
         Some("version") => crate::version::Args::command().print_help()?,
+        Some("ignore") => crate::ignore_cmd::Args::command().print_help()?,
         Some(_) => {
             let args = invocation
                 .git_globals

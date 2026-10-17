@@ -1,0 +1,258 @@
+//! Files GANG manages together with the team: `.gitignore` and
+//! `.gitattributes` (DESIGN.md §17).
+//!
+//! A managed file has two parts:
+//!
+//! - a **managed block** that GANG generates and nobody edits, and
+//! - **project rules** the team adds, kept sorted so that two people adding
+//!   rules never conflict.
+//!
+//! Comments outside the managed block are not kept.
+
+use std::collections::BTreeSet;
+
+use unicode_normalization::UnicodeNormalization;
+
+const START: &str = "# >>> gang managed v";
+const END: &str = "# <<< gang managed";
+
+/// Which managed file a text belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Ignore,
+    Attributes,
+}
+
+impl Kind {
+    fn rules_header(self) -> &'static str {
+        match self {
+            Kind::Ignore => "# Project rules — added with `gang ignore add`, kept sorted",
+            Kind::Attributes => "# Project rules — kept sorted",
+        }
+    }
+}
+
+/// A parsed managed file.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ManagedFile {
+    /// Version of the managed block, `None` when the file has none.
+    pub version: Option<u32>,
+    /// The managed block, markers included, exactly as written.
+    pub block: String,
+    /// Rules outside the managed block.
+    pub rules: BTreeSet<String>,
+}
+
+impl ManagedFile {
+    pub fn parse(text: &str) -> ManagedFile {
+        let mut file = ManagedFile::default();
+        let mut in_block = false;
+        for line in text.lines() {
+            let line = line.trim_end_matches('\r');
+            if !in_block {
+                if let Some(rest) = line.strip_prefix(START) {
+                    in_block = true;
+                    file.version = rest
+                        .split(|c: char| !c.is_ascii_digit())
+                        .next()
+                        .and_then(|digits| digits.parse().ok());
+                    file.block = format!("{line}\n");
+                    continue;
+                }
+                let rule = line.trim();
+                if !rule.is_empty() && !rule.starts_with('#') {
+                    file.rules.insert(rule.nfc().collect());
+                }
+            } else {
+                file.block.push_str(line);
+                file.block.push('\n');
+                if line == END {
+                    in_block = false;
+                }
+            }
+        }
+        if in_block {
+            // An unterminated block: close it so the file stays well-formed.
+            file.block.push_str(END);
+            file.block.push('\n');
+        }
+        file
+    }
+
+    /// The file's text: managed block, a blank line, then the project rules.
+    pub fn render(&self, kind: Kind) -> String {
+        let mut text = self.block.clone();
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(kind.rules_header());
+        text.push('\n');
+        for rule in ordered_rules(&self.rules, kind) {
+            text.push_str(rule);
+            text.push('\n');
+        }
+        text
+    }
+
+    /// Replaces the managed block.
+    pub fn with_block(mut self, block: String, version: u32) -> ManagedFile {
+        self.block = block;
+        self.version = Some(version);
+        self
+    }
+}
+
+/// Sorted rules. In `.gitignore`, negations (`!rule`) go last so they can
+/// re-include what the other rules exclude.
+fn ordered_rules(rules: &BTreeSet<String>, kind: Kind) -> Vec<&str> {
+    let (negations, others): (Vec<&str>, Vec<&str>) = rules
+        .iter()
+        .map(String::as_str)
+        .partition(|rule| kind == Kind::Ignore && rule.starts_with('!'));
+    others.into_iter().chain(negations).collect()
+}
+
+/// 3-way merge of a managed file. The managed block comes from the side with
+/// the newer GANG version (ours on a tie); project rules are the union of both
+/// sides minus what either side removed. Never conflicts.
+pub fn merge(base: &str, ours: &str, theirs: &str, kind: Kind) -> String {
+    let base = ManagedFile::parse(base);
+    let ours = ManagedFile::parse(ours);
+    let theirs = ManagedFile::parse(theirs);
+
+    let (version, block) = if theirs.version > ours.version {
+        (theirs.version, theirs.block.clone())
+    } else {
+        (ours.version, ours.block.clone())
+    };
+    let removed: BTreeSet<&String> = base
+        .rules
+        .iter()
+        .filter(|rule| !ours.rules.contains(*rule) || !theirs.rules.contains(*rule))
+        .collect();
+    let rules = ours
+        .rules
+        .iter()
+        .chain(&theirs.rules)
+        .filter(|rule| !removed.contains(rule))
+        .cloned()
+        .collect();
+    ManagedFile {
+        version,
+        block,
+        rules,
+    }
+    .render(kind)
+}
+
+/// Builds a managed block from sections of lines.
+pub fn block(version: u32, regenerated_by: &str, sections: &[(&str, Vec<String>)]) -> String {
+    let mut text = format!("{START}{version} · DO NOT EDIT — regenerated by `{regenerated_by}`\n");
+    for (title, lines) in sections {
+        if lines.is_empty() {
+            continue;
+        }
+        if !title.is_empty() {
+            text.push_str(&section_title(title));
+            text.push('\n');
+        }
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text.push_str(END);
+    text.push('\n');
+    text
+}
+
+fn section_title(title: &str) -> String {
+    const WIDTH: usize = 40;
+    let head = format!("# ── {title} ");
+    let fill = WIDTH.saturating_sub(head.chars().count());
+    format!("{head}{}", "─".repeat(fill))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(rules: &[&str]) -> String {
+        let block = block(
+            1,
+            "gang ignore update",
+            &[("Unity", vec!["/[Ll]ibrary/".into()])],
+        );
+        ManagedFile::parse(&block)
+            .with_rules(rules)
+            .render(Kind::Ignore)
+    }
+
+    impl ManagedFile {
+        fn with_rules(mut self, rules: &[&str]) -> ManagedFile {
+            self.rules = rules.iter().map(|r| r.to_string()).collect();
+            self
+        }
+    }
+
+    #[test]
+    fn renders_block_then_sorted_rules_with_negations_last() {
+        let text = file(&["!/Keep.txt", "/b/", "/a/"]);
+        assert_eq!(
+            text,
+            "# >>> gang managed v1 · DO NOT EDIT — regenerated by `gang ignore update`\n\
+             # ── Unity ─────────────────────────────\n\
+             /[Ll]ibrary/\n\
+             # <<< gang managed\n\
+             \n\
+             # Project rules — added with `gang ignore add`, kept sorted\n\
+             /a/\n\
+             /b/\n\
+             !/Keep.txt\n"
+        );
+    }
+
+    #[test]
+    fn parse_render_is_stable() {
+        let text = file(&["/x/", "*.tmp"]);
+        assert_eq!(ManagedFile::parse(&text).render(Kind::Ignore), text);
+    }
+
+    #[test]
+    fn parses_a_plain_gitignore() {
+        let parsed = ManagedFile::parse("# comment\n\nLibrary/\r\n*.tmp\n");
+        assert_eq!(parsed.version, None);
+        assert!(parsed.block.is_empty());
+        assert_eq!(parsed.rules.len(), 2);
+    }
+
+    #[test]
+    fn merge_keeps_both_sides_additions_and_removals() {
+        let base = file(&["/old/", "/shared/"]);
+        let ours = file(&["/shared/", "/mine/"]);
+        let theirs = file(&["/old/", "/shared/", "/theirs/"]);
+        let merged = ManagedFile::parse(&merge(&base, &ours, &theirs, Kind::Ignore));
+        let rules: Vec<&str> = merged.rules.iter().map(String::as_str).collect();
+        assert_eq!(rules, vec!["/mine/", "/shared/", "/theirs/"]);
+    }
+
+    #[test]
+    fn merge_takes_the_newer_managed_block() {
+        let old = file(&[]);
+        let newer = ManagedFile::parse(&old)
+            .with_block(
+                block(
+                    2,
+                    "gang ignore update",
+                    &[("Unity", vec!["/[Tt]emp/".into()])],
+                ),
+                2,
+            )
+            .render(Kind::Ignore);
+        let merged = merge(&old, &old, &newer, Kind::Ignore);
+        assert_eq!(ManagedFile::parse(&merged).version, Some(2));
+        assert!(merged.contains("/[Tt]emp/"));
+        let merged = merge(&old, &newer, &old, Kind::Ignore);
+        assert_eq!(ManagedFile::parse(&merged).version, Some(2));
+    }
+}

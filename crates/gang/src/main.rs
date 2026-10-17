@@ -1,10 +1,16 @@
 mod help;
+mod ignore_cmd;
+mod plumbing;
+mod setup_cmd;
+mod ui;
 mod version;
 
 use anyhow::Result;
 use gang_core::commands;
 use gang_core::git::{self, GitError};
 use gang_core::invocation::Invocation;
+use gang_core::repo::Repo;
+use gang_core::setup;
 
 fn main() {
     let invocation = Invocation::parse(std::env::args_os().skip(1));
@@ -39,6 +45,15 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("git") => plain_git(invocation),
         Some("version") => version::run(invocation),
         Some("help") => help::run(invocation),
+        Some("init") => setup_cmd::init(invocation),
+        Some("clone") => setup_cmd::clone(invocation),
+        Some("ignore") => ignore_cmd::run(invocation),
+        Some("merge-driver") => plumbing::merge_driver(invocation),
+        Some("hook") => Ok(0),
+        Some("config") => match plumbing::config(invocation)? {
+            Some(code) => Ok(code),
+            None => wrapped(invocation, "config", &[]),
+        },
         Some(name) => match commands::wrapped_layers(name) {
             Some(layers) => wrapped(invocation, name, layers),
             None => passthrough(invocation),
@@ -52,6 +67,9 @@ fn run(invocation: &Invocation) -> Result<i32> {
 fn wrapped(invocation: &Invocation, name: &str, layers: &[commands::Layer]) -> Result<i32> {
     git::ensure_supported()?;
     debug(|| format!("wrapped `{name}`, layers {layers:?}"));
+    if let Some(repo) = Repo::discover(&invocation.git_globals)? {
+        setup::ensure_installed(&repo)?;
+    }
     Ok(git::run_inherited(invocation.git_args())?)
 }
 
