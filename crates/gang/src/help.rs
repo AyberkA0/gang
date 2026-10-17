@@ -13,6 +13,8 @@ GANG commands:
   init             Set up a repository for GANG (or create one)
   clone <repo>     Clone a repository and set it up (owner/repo works)
   save [-m msg]    Add every change and commit it, after GANG's checks
+  sync             Save, merge the team's work, answer conflicts, push
+  bang             Answer quick questions about merge conflicts
   undo             Undo the last save, reset, restore or clean
   who [path]       Who on the team is changing what
   tree <file>      Show the objects of a scene or prefab
@@ -54,6 +56,8 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         Some("ignore") => crate::ignore_cmd::Args::command().print_help()?,
         Some("save") => crate::save_cmd::SaveArgs::command().print_help()?,
         Some("tree") => crate::semantic_cmd::TreeArgs::command().print_help()?,
+        Some("sync") => crate::sync_cmd::Args::command().print_help()?,
+        Some("bang") => crate::bang::Args::command().print_help()?,
         Some(_) => {
             let args = invocation
                 .git_globals

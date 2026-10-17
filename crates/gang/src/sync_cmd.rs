@@ -1,0 +1,319 @@
+//! `gang sync`: save, pull, merge, answer, push (DESIGN.md §18.1).
+
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use gang_core::config::Config;
+use gang_core::invocation::Invocation;
+use gang_core::repo::{Repo, split_nul};
+use gang_core::{attributes, git, presence, semantic, setup, unity};
+
+use crate::ui;
+
+/// Save your work, merge the team's, and push
+#[derive(Parser)]
+#[command(name = "gang sync")]
+pub struct Args {
+    /// Rebase onto the team's work instead of merging
+    #[arg(long)]
+    rebase: bool,
+    /// Commit message for uncommitted changes (asked when missing)
+    #[arg(short, long)]
+    message: Option<String>,
+}
+
+pub fn run(invocation: &Invocation) -> Result<i32> {
+    let args = Args::parse_from(
+        std::iter::once(OsString::from("gang sync")).chain(invocation.args.iter().cloned()),
+    );
+    git::ensure_supported()?;
+    let repo = Repo::discover(&invocation.git_globals)?.context("not inside a git repository")?;
+    setup::ensure_installed(&repo)?;
+    let config = Config::load(repo.root())?;
+
+    if !crate::bang::unmerged(&repo)?.is_empty() {
+        eprintln!("✗ A merge is still in progress. Run `gang bang` to finish it first.");
+        return Ok(1);
+    }
+
+    // 1. Uncommitted work.
+    let dirty = !repo.run(["status", "--porcelain"])?.trim().is_empty();
+    if dirty {
+        let save = args.message.is_some()
+            || (ui::interactive()
+                && ui::confirm("You have uncommitted changes. Save them first?", true)?);
+        if !save {
+            eprintln!("✗ Save or stash your changes first (gang save -m \"…\").");
+            return Ok(1);
+        }
+        let mut save_args: Vec<OsString> = Vec::new();
+        if let Some(message) = &args.message {
+            save_args.extend(["-m".into(), message.into()]);
+        }
+        let save = Invocation {
+            args: save_args,
+            command: Some("save".into()),
+            ..invocation.clone()
+        };
+        let code = crate::save_cmd::save(&save)?;
+        if code != 0 {
+            return Ok(code);
+        }
+    }
+
+    if !presence::has_origin(&repo)? {
+        eprintln!("✗ This repository has no `origin` remote to sync with.");
+        return Ok(1);
+    }
+
+    for attempt in 0..3 {
+        // 2. Fetch.
+        let code = git::run_inherited([
+            "-C",
+            &repo.root().to_string_lossy(),
+            "fetch",
+            "-q",
+            "origin",
+        ])?;
+        if code != 0 {
+            return Ok(code);
+        }
+        let _ = presence::fetch(&repo);
+        let upstream = presence::upstream(&repo, &config)?;
+
+        // 3. Merge what came in.
+        if let Some(upstream) = &upstream {
+            let incoming = count(&repo, &format!("HEAD..{upstream}"))?;
+            if incoming > 0 {
+                if let Some(code) = editor_guard(invocation, &repo, upstream, &config)? {
+                    return Ok(code);
+                }
+                if config.layers.auto_remap {
+                    pre_merge(&repo, upstream)?;
+                }
+                let code = merge(
+                    invocation,
+                    &repo,
+                    upstream,
+                    args.rebase || config.sync.strategy == "rebase",
+                    incoming,
+                )?;
+                if code != 0 {
+                    return Ok(code);
+                }
+            }
+        }
+
+        // 4. Push what is ours.
+        let outgoing = match &upstream {
+            Some(upstream) => count(&repo, &format!("{upstream}..HEAD"))?,
+            None => 1,
+        };
+        if outgoing == 0 {
+            ui::done(format!(
+                "Up to date with {}",
+                upstream.as_deref().unwrap_or("origin")
+            ));
+            return Ok(0);
+        }
+        let has_upstream = repo
+            .try_run(["rev-parse", "--abbrev-ref", "@{upstream}"])?
+            .is_some();
+        let mut push = vec!["push", "-q"];
+        if !has_upstream {
+            push.extend(["-u", "origin", "HEAD"]);
+        }
+        let output = repo.output(&push)?;
+        if output.status.success() {
+            ui::done(format!(
+                "Pushed {outgoing} commit{}",
+                if outgoing == 1 { "" } else { "s" }
+            ));
+            return Ok(0);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let rejected = stderr.contains("rejected")
+            || stderr.contains("fetch first")
+            || stderr.contains("non-fast-forward");
+        if !rejected || attempt == 2 {
+            eprint!("{stderr}");
+            return Ok(output.status.code().unwrap_or(1));
+        }
+        println!("Someone pushed in the meantime; merging their work too…");
+    }
+    Ok(1)
+}
+
+/// Passes that run before merging (DESIGN.md §14.2): the layer remap.
+pub fn pre_merge(repo: &Repo, upstream: &str) -> Result<()> {
+    let Some(report) = gang_core::layers::run(repo, upstream)? else {
+        return Ok(());
+    };
+    for m in &report.moves {
+        println!("Layer conflict: {}.", m.taken_by);
+        println!(
+            "  → Moving {:?} to layer {} and updating what your commits used it for:",
+            m.name, m.to
+        );
+    }
+    for line in &report.updated {
+        println!("    ✓ {line}");
+    }
+    for line in &report.review {
+        println!("    ⚠ {line} — please review");
+    }
+    let subject = repo.run(["log", "-1", "--format=%s"])?;
+    ui::done(format!("Committed \"{}\"", subject.trim()));
+    Ok(())
+}
+
+fn count(repo: &Repo, range: &str) -> Result<usize> {
+    Ok(repo
+        .run(["rev-list", "--count", range])?
+        .trim()
+        .parse()
+        .unwrap_or(0))
+}
+
+/// Stops when Unity is open and the incoming work changes scenes or prefabs.
+fn editor_guard(
+    invocation: &Invocation,
+    repo: &Repo,
+    upstream: &str,
+    config: &Config,
+) -> Result<Option<i32>> {
+    let open: Vec<String> = unity::find_projects(repo.root())
+        .into_iter()
+        .filter(|p| unity::is_editor_open(&p.path(repo.root())))
+        .map(|p| p.dir)
+        .collect();
+    if open.is_empty() {
+        return Ok(None);
+    }
+    let changed =
+        split_nul(&repo.run(["diff", "--name-only", "-z", &format!("HEAD...{upstream}")])?);
+    let scenes: Vec<&String> = changed
+        .iter()
+        .filter(|p| p.ends_with(".unity") || p.ends_with(".prefab"))
+        .collect();
+    if scenes.is_empty() {
+        return Ok(None);
+    }
+    if invocation.options.ignore_editor || config.sync.editor_open == "warn" {
+        ui::warn("Unity is open: let it reload the changed scenes before you save in Unity.");
+        return Ok(None);
+    }
+    eprintln!(
+        "✗ Unity is open, and this sync would change {} scene/prefab file{}:",
+        scenes.len(),
+        if scenes.len() == 1 { "" } else { "s" }
+    );
+    for scene in scenes.iter().take(10) {
+        eprintln!("    {scene}");
+    }
+    ui::hint("Save your work and close Unity, then run `gang sync` again.");
+    ui::hint("(Use `gang --ignore-editor sync` to sync anyway.)");
+    Ok(Some(1))
+}
+
+fn merge(
+    invocation: &Invocation,
+    repo: &Repo,
+    upstream: &str,
+    rebase: bool,
+    incoming: usize,
+) -> Result<i32> {
+    let authors: BTreeSet<String> = repo
+        .run(["log", "--format=%an", &format!("HEAD..{upstream}")])?
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let names = authors.into_iter().collect::<Vec<_>>().join(", ");
+    println!(
+        "Pulling {incoming} commit{} from {}…",
+        if incoming == 1 { "" } else { "s" },
+        if names.is_empty() {
+            upstream.to_owned()
+        } else {
+            names.clone()
+        }
+    );
+    let before = repo.run(["rev-parse", "HEAD"])?.trim().to_owned();
+    let mut command = std::process::Command::new("git");
+    command.current_dir(repo.root()).env(
+        "GANG_THEIRS_NAME",
+        if names.contains(',') || names.is_empty() {
+            "theirs".to_owned()
+        } else {
+            names.clone()
+        },
+    );
+    if rebase {
+        command.args(["rebase", "-q", upstream]);
+    } else {
+        command.args(["merge", "--no-edit", "-q", upstream]);
+    }
+    let status = command.status()?;
+    let code = git::exit_code(status);
+    if code != 0 {
+        let code = crate::wrap::offer_bang(repo, code)?;
+        if code != 0 || !crate::bang::unmerged(repo)?.is_empty() {
+            return Ok(if code == 0 { 1 } else { code });
+        }
+    }
+    let _ = invocation;
+    summarize(repo, &before, &names);
+    Ok(0)
+}
+
+/// "Merged automatically from mehmet:" with what changed in Unity files.
+fn summarize(repo: &Repo, before: &str, names: &str) {
+    let Ok(changed) = repo.run(["diff", "--name-only", "-z", before, "HEAD"]) else {
+        return;
+    };
+    let unity: Vec<String> = split_nul(&changed)
+        .into_iter()
+        .filter(|p| attributes::is_unity_yaml(p))
+        .collect();
+    if unity.is_empty() {
+        return;
+    }
+    let guids = semantic::guid_index(repo);
+    let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
+    println!(
+        "Merged automatically{}:",
+        if names.is_empty() {
+            String::new()
+        } else {
+            format!(" from {names}")
+        }
+    );
+    for path in unity {
+        let old = semantic::blob(repo, &format!("{before}:{path}"))
+            .ok()
+            .flatten();
+        let new = semantic::blob(repo, &format!("HEAD:{path}")).ok().flatten();
+        let parse = |t: Option<String>| t.and_then(|t| unity_yaml::parse(&t).ok());
+        let (Some(old), Some(new)) = (parse(old), parse(new)) else {
+            println!("  {path}");
+            continue;
+        };
+        let changes = gang_merge::diff::diff(&old, &new, &rules);
+        let ctx = gang_merge::render::Context::new(&old, &new, Some(&guids));
+        let lines = gang_merge::render::render(&changes, &ctx, false);
+        println!(
+            "  {}: {} change{}",
+            path.rsplit('/').next().unwrap_or(&path),
+            lines.len(),
+            if lines.len() == 1 { "" } else { "s" }
+        );
+        for line in lines.iter().take(6) {
+            println!("    {line}");
+        }
+        if lines.len() > 6 {
+            println!("    … {} more", lines.len() - 6);
+        }
+    }
+}

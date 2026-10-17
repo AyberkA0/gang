@@ -47,7 +47,7 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
             Some(code) => Ok(code),
             None => git_command(invocation, &invocation.args),
         },
-        ("fetch" | "pull", Some(repo)) => {
+        ("fetch", Some(repo)) => {
             let code = git_command(invocation, &invocation.args)?;
             if code == 0 && setup::is_gang_repo(&repo) {
                 let _ = gang_core::presence::fetch(&repo);
@@ -55,8 +55,71 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
             Ok(code)
         }
         ("filter-branch" | "filter-repo", _) => rewrite_history(invocation),
+        ("merge" | "rebase" | "cherry-pick" | "revert" | "stash" | "pull", Some(repo)) => {
+            let aborting = invocation
+                .args
+                .iter()
+                .any(|a| a == "--abort" || a == "--quit" || a == "--skip");
+            if name == "merge" && !aborting && setup::is_gang_repo(&repo) {
+                let args = strings(&invocation.args);
+                let revs = positionals(
+                    &args,
+                    &[
+                        "-m",
+                        "-F",
+                        "-s",
+                        "-X",
+                        "--strategy",
+                        "--strategy-option",
+                        "--file",
+                    ],
+                );
+                if let [rev] = revs.as_slice() {
+                    let auto_remap = gang_core::config::Config::load(repo.root())
+                        .map(|c| c.layers.auto_remap)
+                        .unwrap_or(true);
+                    if auto_remap && !has(&args, &["--continue", "--no-commit", "--squash"]) {
+                        crate::sync_cmd::pre_merge(&repo, rev)?;
+                    }
+                }
+            }
+            let code = git_command(invocation, &invocation.args)?;
+            if aborting {
+                gang_core::store::clear_all(&repo)?;
+                return Ok(code);
+            }
+            if name == "pull" && code == 0 && setup::is_gang_repo(&repo) {
+                let _ = gang_core::presence::fetch(&repo);
+            }
+            offer_bang(&repo, code)
+        }
         _ => git_command(invocation, &invocation.args),
     }
+}
+
+/// After a command that merges: offer `gang bang` when conflicts are left.
+pub fn offer_bang(repo: &Repo, code: i32) -> Result<i32> {
+    if code == 0 {
+        return Ok(0);
+    }
+    let open = crate::bang::open_questions(repo)?;
+    if open == 0 {
+        return Ok(code);
+    }
+    let plural = if open == 1 { "" } else { "s" };
+    if !ui::interactive() {
+        eprintln!("{open} conflict{plural} found. Run `gang bang` to resolve them.");
+        return Ok(code);
+    }
+    println!();
+    if ui::confirm(
+        &format!("{open} conflict{plural} found. Resolve them now?"),
+        true,
+    )? {
+        return crate::bang::resolve(repo, &crate::bang::Args::default());
+    }
+    println!("Run `gang bang` when you are ready.");
+    Ok(code)
 }
 
 /// Runs the invocation's command with `args` instead of its own arguments.

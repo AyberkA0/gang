@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use gang_core::invocation::Invocation;
 use gang_core::managed::{self, Kind};
 use gang_core::repo::Repo;
-use gang_core::{config, git};
+use gang_core::{config, git, store};
 
 /// `gang merge-driver <unity|ignore> <base> <ours> <theirs> [path]`: git's
 /// merge driver. Writes the result to `<ours>`; exits non-zero on conflicts.
@@ -35,10 +35,60 @@ pub fn merge_driver(invocation: &Invocation) -> Result<i32> {
             fs::write(ours, merged)?;
             Ok(0)
         }
-        // Until the semantic merge lands (PLAN.md P7), merge as text like git.
-        "unity" => text_merge(base, ours, theirs),
+        "unity" | "json" => semantic_merge(kind, base, ours, theirs, path),
         other => bail!("unknown merge driver kind {other:?}"),
     }
+}
+
+/// Semantic merge of a Unity YAML or JSON file. Binary files and files that
+/// do not parse fall back to git's own text merge.
+fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) -> Result<i32> {
+    let read = |p: &str| fs::read(p).with_context(|| format!("could not read {p}"));
+    let (b, o, t) = (read(base)?, read(ours)?, read(theirs)?);
+    if [&b, &o, &t].iter().any(|bytes| bytes.contains(&0)) {
+        // Binary: keep ours and report a conflict; `gang bang` asks.
+        return Ok(1);
+    }
+    let text = |bytes: Vec<u8>| String::from_utf8(bytes).ok();
+    let (Some(b), Some(o), Some(t)) = (text(b), text(o), text(t)) else {
+        return text_merge(base, ours, theirs);
+    };
+    let Some(repo) = gang_core::repo::Repo::discover(&[])? else {
+        return text_merge(base, ours, theirs);
+    };
+    let config = gang_core::config::Config::load(repo.root()).unwrap_or_default();
+    let rules = gang_core::semantic::rules(&config);
+    let format = if kind == "json" {
+        store::Format::Json
+    } else {
+        store::Format::Unity
+    };
+    let theirs_name = std::env::var("GANG_THEIRS_NAME").unwrap_or_else(|_| other_side_name(&repo));
+    match store::driver_merge(&repo, path, format, &b, &o, &t, &rules, &theirs_name) {
+        Some((merged, conflicts)) => {
+            fs::write(ours, merged)?;
+            Ok(if conflicts { 1 } else { 0 })
+        }
+        None => text_merge(base, ours, theirs),
+    }
+}
+
+/// A name for the other side of the merge: the merged branch's author.
+fn other_side_name(repo: &gang_core::repo::Repo) -> String {
+    for head in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "REBASE_HEAD",
+    ] {
+        if let Ok(Some(name)) = repo.try_run(["log", "-1", "--format=%an", head]) {
+            let name = name.trim();
+            if !name.is_empty() {
+                return name.to_owned();
+            }
+        }
+    }
+    "the other side".to_owned()
 }
 
 fn text_merge(base: &str, ours: &str, theirs: &str) -> Result<i32> {

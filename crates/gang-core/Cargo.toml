@@ -11,6 +11,7 @@ publish.workspace = true
 anyhow.workspace = true
 ctrlc.workspace = true
 fd-lock.workspace = true
+gang-csharp = { path = "../gang-csharp" }
 gang-merge = { path = "../gang-merge" }
 serde.workspace = true
 serde_json.workspace = true

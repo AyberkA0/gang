@@ -110,6 +110,11 @@ pub fn install(repo: &Repo) -> Result<Vec<String>> {
             "merge.gang-ignore.driver",
             format!("{gang} merge-driver ignore %O %A %B %P"),
         ),
+        ("merge.gang-json.name", "GANG merge for JSON".to_owned()),
+        (
+            "merge.gang-json.driver",
+            format!("{gang} merge-driver json %O %A %B %P"),
+        ),
     ];
     for (key, value) in settings {
         if repo.config_get(key)?.as_deref() != Some(value.as_str()) {
@@ -159,8 +164,12 @@ fn marker_path(repo: &Repo) -> PathBuf {
     repo.gang_dir().join("installed")
 }
 
+/// Changes when the installed drivers or hooks change, so existing clones
+/// are set up again.
+const SETUP_VERSION: u32 = 2;
+
 fn marker_text(gang: &str) -> String {
-    format!("{gang}\n{}\n", env!("CARGO_PKG_VERSION"))
+    format!("{gang}\n{}\n{SETUP_VERSION}\n", env!("CARGO_PKG_VERSION"))
 }
 
 /// Writes one hook shim. An existing hook that GANG did not write is kept as

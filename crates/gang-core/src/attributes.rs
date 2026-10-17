@@ -143,6 +143,9 @@ pub fn block() -> String {
     let gang = vec![
         ".gitignore text eol=lf merge=gang-ignore".to_owned(),
         ".gitattributes text eol=lf merge=gang-ignore".to_owned(),
+        "**/ProjectSettings/ProjectVersion.txt merge=gang".to_owned(),
+        "**/Packages/manifest.json merge=gang-json".to_owned(),
+        "**/Packages/packages-lock.json merge=gang-json".to_owned(),
     ];
     let lfs = LFS
         .iter()
@@ -157,7 +160,7 @@ pub fn block() -> String {
             ("", vec!["* text=auto eol=lf".to_owned()]),
             ("Unity YAML (semantic merge)", unity),
             ("Code", code),
-            ("Files managed by GANG", gang),
+            ("Files GANG merges specially", gang),
             ("Large binary files (Git LFS)", lfs),
         ],
     )

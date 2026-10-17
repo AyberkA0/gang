@@ -104,10 +104,16 @@ pub fn run(repo: Repo) -> Result<i32> {
                         let _ = jobs.send(Job::Publish { force: true });
                         let _ = jobs.send(Job::Poll);
                     }
-                    KeyCode::Char('s') => {
-                        terminal = run_outside(terminal, &["save"])?;
+                    KeyCode::Char(c @ ('s' | 'y' | 'b')) => {
+                        let command = match c {
+                            's' => "save",
+                            'y' => "sync",
+                            _ => "bang",
+                        };
+                        terminal = run_outside(terminal, &[command])?;
                         refresh(&repo, &config, &mut view);
                         let _ = jobs.send(Job::Publish { force: false });
+                        let _ = jobs.send(Job::Poll);
                     }
                     _ => {}
                 }
@@ -307,6 +313,10 @@ fn draw(frame: &mut Frame, view: &View, offline_after: i64) {
         Span::raw(" refresh  "),
         Span::styled("s", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(" save  "),
+        Span::styled("y", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" sync  "),
+        Span::styled("b", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(" bang  "),
         Span::styled(
             format!("  {}", view.status),
             Style::default().fg(Color::DarkGray),

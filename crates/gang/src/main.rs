@@ -1,3 +1,4 @@
+mod bang;
 mod help;
 mod ignore_cmd;
 mod panel;
@@ -6,6 +7,7 @@ mod presence_cmd;
 mod save_cmd;
 mod semantic_cmd;
 mod setup_cmd;
+mod sync_cmd;
 mod ui;
 mod version;
 mod wrap;
@@ -65,6 +67,8 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("undo") => save_cmd::undo(invocation),
         Some("who") => presence_cmd::who(invocation),
         Some("tree") => semantic_cmd::tree(invocation),
+        Some("bang") => bang::run(invocation),
+        Some("sync") => sync_cmd::run(invocation),
         Some("presence-publish") => presence_cmd::publish(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),

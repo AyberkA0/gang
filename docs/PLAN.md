@@ -153,17 +153,17 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** scenes and prefabs merge unless two people changed the same property, and the result always opens in Unity.
 
-- [ ] `gang merge-driver`; conflict store `.git/gang/conflicts.json`.
-- [ ] Document-level 3-way merge (DESIGN §13.3) including fileID collision remapping.
-- [ ] Property-level merge by field kind; schema table; coupled groups.
-- [ ] Ordered-set list merge with Canvas detection; keyed lists; prefab sets.
-- [ ] Graph validation and repair: references, symmetry, cascade deletes, delete/modify, move, cycles, dangling references.
-- [ ] Document insertion order per Unity version (from spike S2).
-- [ ] `.meta` merge; binary `.asset` detection.
-- [ ] Special mergers: `manifest.json` / `packages-lock.json`, `EditorBuildSettings`, `TagManager` (tags, sorting layers), collision matrices, `ProjectVersion.txt`.
-- [ ] **Layer remap pre-merge pass** (DESIGN §14.2): detection, YAML rewrite, collision matrices, C# rewrite of recognized patterns with `gang-csharp`, review list, dedicated commit.
-- [ ] Golden fixtures: at least one per root cause and conflict kind (target ≥ 40), produced in the test Unity project; optional comparison with Unity's own YAML merge tool.
-- [ ] Unity-in-the-loop check: a script that opens merged scenes in Unity batch mode and fails on errors (manual first, CI on a self-hosted runner later).
+- [x] `gang merge-driver` (Unity YAML and JSON); conflict store in `.git/gang/merge/<file>/` (the three versions, the questions, the answers).
+- [x] Document-level 3-way merge (DESIGN §13.3) including fileID collision remapping.
+- [x] Property-level merge by field kind; coupled groups (rotation, colors, RectTransform layout); same-length lists merge element by element (layers, material slots).
+- [x] Ordered-set list merge with UI order conflicts (RectTransform); keyed lists (prefab overrides by target and property, lists with a `guid`); prefab sets.
+- [x] Graph repair (children, components and scene roots follow the parents; cycles broken) and delete/modify conflicts with delete / keep / re-parent. Repair only touches what the merge broke.
+- [x] Document insertion order: scenes keep documents sorted by fileID, prefabs follow hierarchy order (measured on the corpus: 685/685 scenes sorted, 22/683 prefabs).
+- [x] `.meta` merge; binary `.asset` detection (binary files are left to `gang bang`).
+- [x] Special mergers: `manifest.json` / `packages-lock.json` (JSON, key by key), `EditorBuildSettings` (scenes by guid), `TagManager` (layers by index), `ProjectVersion.txt` (always asks). Collision matrices merge as values.
+- [x] **Layer remap pre-merge pass** (DESIGN §14.2) in `gang sync` and `gang merge <branch>`: detection, YAML rewrite (objects, masks, prefab overrides, layer-named script fields), C# rewrite of recognized patterns, review list, dedicated commit. Collision matrices are listed for review rather than rewritten.
+- [ ] Golden fixtures produced in Unity — needs a Unity install. For now: 16 hand-written scenarios (one per root cause and conflict kind) in `crates/gang-merge/tests/merge.rs`, and corpus properties (merging any of 1,566 real files with itself changes nothing).
+- [ ] Unity-in-the-loop check — needs a Unity install.
 
 **Done when:** all golden fixtures pass; merged outputs open in Unity without errors or missing references; a property test confirms conflict markers are never written into Unity files.
 
@@ -173,14 +173,14 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** the remaining real conflicts take seconds to answer.
 
-- [ ] Prompt engine (single-key input with `crossterm`), screen per conflict kind, details view.
-- [ ] Options per kind (DESIGN §15.3), including "both" arithmetic, re-parent and typed value editing.
-- [ ] `M` / `T`, undo, quit and resume, final summary with confirmation.
-- [ ] Applying answers: rewrite, stage, continue a rebase.
-- [ ] Text hunks with `$EDITOR`; binary compare.
-- [ ] Semantic rerere.
-- [ ] Auto-trigger after merging commands; non-TTY hint.
-- [ ] `gang sync` (DESIGN §18.1); `pull` / `merge` / `rebase` wrappers; automatic-merge summary; post-merge integrity warnings.
+- [x] Prompt engine (single-key input with `crossterm`), screen per conflict kind, details view.
+- [x] Options per kind (DESIGN §15.3), including "both" arithmetic, re-parent and value editing.
+- [x] `M` / `T`, undo, quit and resume, final summary with confirmation.
+- [x] Applying answers: re-run the merge with the answers, stage, then commit the merge or continue the rebase / cherry-pick / revert.
+- [x] Text hunks with `$EDITOR`; binary mine / theirs / save theirs to compare.
+- [x] Semantic rerere (`.git/gang/rerere.json`).
+- [x] Auto-trigger after merging commands; non-TTY hint; `--abort` clears stored conflicts.
+- [x] `gang sync` (DESIGN §18.1) with retry when someone pushed meanwhile; `pull` / `merge` / `rebase` wrappers; automatic-merge summary. Post-merge integrity warnings come with P11.
 
 **Done when:** pty-driven tests (`expectrl`) cover every conflict kind; the WORKFLOW.md day is replayed end to end by the harness with four clones.
 

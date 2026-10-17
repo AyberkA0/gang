@@ -712,7 +712,7 @@ Violations become conflicts, never silent output:
 
 - Unchanged documents are copied byte for byte.
 - Changed documents are re-emitted in Unity style.
-- New documents are inserted where Unity would place them (ordering rule confirmed by spike S2), so the next save in Unity produces no churn.
+- New documents are inserted where Unity would place them, so the next save in Unity produces no churn: scenes keep documents sorted by fileID (scene settings first, `SceneRoots` last); prefabs follow hierarchy order, so a new document goes after its predecessor on the side that added it. (Measured on 1,368 real scenes and prefabs.)
 - LF line endings.
 
 ### 13.8 Performance targets
@@ -732,7 +732,7 @@ Violations become conflicts, never silent output:
 
 Layers are referenced by number. When two people give the same layer index different names, GANG keeps the version already on the remote and moves the local one — and everything that uses it — to a free layer, then commits that change. No question is asked.
 
-**When it runs:** as a pre-merge pass of `sync`, `pull` and `merge`, before git merges. `sync` requires a clean working tree (it offers `gang save` first), so the remap only touches committed work.
+**When it runs:** as a pre-merge pass of `gang sync` and `gang merge <branch>`, before git merges. It needs a clean working tree. `sync` requires a clean working tree (it offers `gang save` first), so the remap only touches committed work.
 
 **Detection** (B = merge base, O = ours, T = theirs, for layers 8–31):
 
@@ -751,7 +751,7 @@ Layers are referenced by number. When two people give the same layer index diffe
 | | LayerMask values (`m_Bits`, e.g. camera and light culling masks, script `LayerMask` fields): move bit `i` to `k`. All-ones masks ("Everything") are left alone |
 | | Prefab overrides: `m_Modifications` entries with `propertyPath: m_Layer` or a `m_Bits` path |
 | | Script `int` fields whose name contains "layer" and whose value is `i` (heuristic, listed in the report) |
-| `DynamicsManager.asset`, `Physics2DSettings.asset` | Collision matrix: move row and column `i` to `k` |
+| `DynamicsManager.asset`, `Physics2DSettings.asset` | Collision matrix: listed under "Needs review" (the matrix encoding is not rewritten automatically yet) |
 | C# (`Assets/**/*.cs`, only lines added by our commits) | Recognized patterns: `.layer = i`, `.layer == i` / `!=`, `1 << i`, `const` declarations whose name contains "layer". Name-based calls (`LayerMask.NameToLayer("…")`, `LayerMask.GetMask("…")`) need no change |
 | C#, unrecognized | A literal `i` on a line that mentions "layer" is **reported**, not changed |
 
