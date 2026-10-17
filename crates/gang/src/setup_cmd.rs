@@ -75,7 +75,21 @@ fn has_any(args: &[OsString], options: &[&str]) -> bool {
 /// `gang init [git init options] [directory]`.
 pub fn init(invocation: &Invocation) -> Result<i32> {
     git::ensure_supported()?;
-    let args = &invocation.args;
+    // GANG's own options: --github [--public] [--name <name>].
+    let mut github = false;
+    let mut public = false;
+    let mut name: Option<String> = None;
+    let mut rest: Vec<OsString> = Vec::new();
+    let mut iter = invocation.args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.to_str() {
+            Some("--github") => github = true,
+            Some("--public") => public = true,
+            Some("--name") => name = iter.next().map(|n| n.to_string_lossy().into_owned()),
+            _ => rest.push(arg.clone()),
+        }
+    }
+    let args = &rest;
     let dir = positionals(args, INIT_VALUE_OPTIONS)
         .last()
         .map(PathBuf::from)
@@ -95,6 +109,9 @@ pub fn init(invocation: &Invocation) -> Result<i32> {
 
     let repo = Repo::open(&dir)?;
     set_up(&repo)?;
+    if github {
+        crate::auth_cmd::create_github_repo(invocation, &repo, name, public)?;
+    }
     println!();
     println!("Next: commit the GANG files and push.");
     ui::hint("gang add .gitignore .gitattributes .gang");

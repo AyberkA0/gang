@@ -123,6 +123,11 @@ pub fn install(repo: &Repo) -> Result<Vec<String>> {
     }
     done.push("merge drivers registered".to_owned());
 
+    if crate::auth::load().is_some() {
+        crate::auth::install_helper(repo, &gang)?;
+        done.push("GitHub sign-in connected to git".to_owned());
+    }
+
     let hooks_dir = repo.hooks_dir()?;
     fs::create_dir_all(&hooks_dir)?;
     for name in HOOKS {

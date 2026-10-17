@@ -23,6 +23,7 @@ GANG commands:
   tree <file>      Show the objects of a scene or prefab
   ignore           Manage ignore rules shared by the team
   doctor [--fix]   Check the project's health
+  auth             Sign in to GitHub (login, logout, status)
   git <args>       Run plain git, without GANG's additions
   version          Show GANG, git and git-lfs versions
   help [command]   Show help for a GANG or git command
@@ -66,6 +67,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         Some("unlock") => crate::locks_cmd::UnlockArgs::command().print_help()?,
         Some("locks") => crate::locks_cmd::LocksArgs::command().print_help()?,
         Some("doctor") => crate::doctor_cmd::Args::command().print_help()?,
+        Some("auth") => crate::auth_cmd::Args::command().print_help()?,
         Some(_) => {
             let args = invocation
                 .git_globals

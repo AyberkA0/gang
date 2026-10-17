@@ -111,7 +111,11 @@ impl Sandbox {
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
             .env_remove("GANG_DEBUG")
-            .env("GANG_NO_PRESENCE", "1");
+            .env("GANG_NO_PRESENCE", "1")
+            .env(
+                "GANG_CREDENTIALS_FILE",
+                self.home.join("gang-credentials.json"),
+            );
         command
     }
 

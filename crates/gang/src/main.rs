@@ -1,3 +1,4 @@
+mod auth_cmd;
 mod bang;
 mod doctor_cmd;
 mod help;
@@ -75,6 +76,8 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("unlock") => locks_cmd::unlock(invocation),
         Some("locks") => locks_cmd::list(invocation),
         Some("doctor") => doctor_cmd::run(invocation),
+        Some("auth") => auth_cmd::run(invocation),
+        Some("credential") => auth_cmd::credential(invocation),
         Some("presence-publish") => presence_cmd::publish(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),

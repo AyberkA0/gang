@@ -35,6 +35,7 @@ const READ_ONLY: &[&str] = &[
     "hook",
     "merge-driver",
     "credential",
+    "auth",
 ];
 
 /// Publishing is off in tests and when `GANG_NO_PRESENCE` is set.

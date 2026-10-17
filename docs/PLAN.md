@@ -65,13 +65,15 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** a new teammate logs in once and never sees a password prompt.
 
-- [ ] Device Flow client (`ureq`), honoring `interval` and `slow_down`.
-- [ ] Keychain storage (`keyring`); `gang auth login | logout | status`.
-- [ ] `gang credential` helper (`get` / `store` / `erase`) and its registration.
-- [ ] Startup check sequence (DESIGN §7): git, git-lfs, token validity, identity from GitHub, GitHub-only remote.
-- [ ] Revoked or expired token → clear message and re-login.
+- [x] Device Flow client (`ureq`), honoring `interval` and `slow_down`. The OAuth App's client ID is built in by release builds (`GANG_GITHUB_CLIENT_ID` at compile time) and can be overridden at run time.
+- [x] Keychain storage (`keyring`), with a private file as fallback; `gang auth login | logout | status` (status also checks scopes and clock skew).
+- [x] `gang credential` helper (`get` / `store` / `erase`, github.com only) and its registration per repository.
+- [x] Sign-in fills `user.name` / `user.email` from GitHub when git has none; `gang init --github [--public] [--name]` creates the repository. Commands do not force a sign-in: existing git credentials keep working.
+- [x] Revoked or expired token → clear message and re-login.
 
 **Done when:** a fresh machine on each OS goes from `gang clone` to `gang push` with only the Device Flow step.
+
+> Status: tested end to end against a fake GitHub server. Registering the real OAuth App (one-time, on github.com) is still needed.
 
 ---
 

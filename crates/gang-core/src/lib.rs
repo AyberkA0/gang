@@ -2,6 +2,7 @@
 //! phases) auth, presence, locks and guards.
 
 pub mod attributes;
+pub mod auth;
 pub mod clock;
 pub mod commands;
 pub mod config;
