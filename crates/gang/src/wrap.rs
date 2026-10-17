@@ -35,6 +35,18 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
         ("clean", Some(repo)) => clean(invocation, &repo),
         ("push", _) => push(invocation),
         ("status", repo) => crate::presence_cmd::status(invocation, repo.as_ref()),
+        ("diff", Some(repo)) => match crate::semantic_cmd::diff(invocation, &repo)? {
+            Some(code) => Ok(code),
+            None => git_command(invocation, &invocation.args),
+        },
+        ("show", Some(repo)) => match crate::semantic_cmd::show(invocation, &repo)? {
+            Some(code) => Ok(code),
+            None => git_command(invocation, &invocation.args),
+        },
+        ("log", Some(repo)) => match crate::semantic_cmd::log(invocation, &repo)? {
+            Some(code) => Ok(code),
+            None => git_command(invocation, &invocation.args),
+        },
         ("fetch" | "pull", Some(repo)) => {
             let code = git_command(invocation, &invocation.args)?;
             if code == 0 && setup::is_gang_repo(&repo) {
@@ -154,7 +166,7 @@ fn prefix(invocation: &Invocation) -> Result<String> {
 }
 
 /// `path` as typed in the current directory → path from the repository root.
-fn repo_path(prefix: &str, path: &str) -> String {
+pub fn repo_path(prefix: &str, path: &str) -> String {
     let joined = format!("{prefix}{}", path.replace('\\', "/"));
     let mut parts: Vec<&str> = Vec::new();
     for part in joined.split('/') {
@@ -375,6 +387,34 @@ fn mv(invocation: &Invocation, repo: &Repo) -> Result<i32> {
 /// their assets, and keeps a backup of the working tree.
 fn restore(invocation: &Invocation, repo: &Repo, checkout: bool) -> Result<i32> {
     let args = strings(&invocation.args);
+    if !checkout {
+        let paths = positionals(&args, &["-s", "--source", "--pathspec-from-file"]);
+        if has(&args, &["--noise"]) {
+            let prefix = prefix(invocation)?;
+            let paths: Vec<String> = paths.iter().map(|p| repo_path(&prefix, p)).collect();
+            return crate::semantic_cmd::restore_noise(repo, &paths);
+        }
+        if let Some(target) = paths.iter().find(|p| p.contains("::")) {
+            crate::semantic_cmd::reject_object_paths(&paths)?;
+            let source = args
+                .iter()
+                .position(|a| a == "-s" || a == "--source")
+                .and_then(|i| args.get(i + 1).cloned())
+                .or_else(|| {
+                    args.iter()
+                        .find_map(|a| a.strip_prefix("--source=").map(str::to_owned))
+                });
+            let op = safety::begin(repo, "restore", true)?;
+            let code = crate::semantic_cmd::restore_object(
+                repo,
+                &prefix(invocation)?,
+                target,
+                source.as_deref(),
+            )?;
+            safety::finish(repo, op)?;
+            return Ok(code);
+        }
+    }
     let paths: Vec<String> = if checkout {
         match args.iter().position(|a| a == "--") {
             Some(pos) => args[pos + 1..].to_vec(),

@@ -38,8 +38,15 @@ pub fn identity(repo: &Repo) -> Result<Identity> {
             github_id: None,
         });
     }
+    // `git var` honors both the config and GIT_AUTHOR_EMAIL.
     let email = repo
-        .config_get("user.email")?
+        .try_run(["var", "GIT_AUTHOR_IDENT"])?
+        .and_then(|ident| {
+            let start = ident.find('<')?;
+            let end = ident[start..].find('>')? + start;
+            Some(ident[start + 1..end].to_owned())
+        })
+        .filter(|email| !email.is_empty())
         .context("git does not know who you are; set `git config user.email`")?;
     if let Some(local) = email.strip_suffix("@users.noreply.github.com") {
         if let Some((id, login)) = local.split_once('+') {
@@ -264,6 +271,20 @@ pub fn compute_flags(repo: &Repo, upstream: Option<&str>) -> Result<BTreeMap<Str
                 }
             }
         }
+    }
+
+    // A scene that was only opened and saved is not a change (DESIGN.md §12.2).
+    let rules = gang_merge::diff::Rules::default();
+    let noise: Vec<String> = flags
+        .iter()
+        .filter(|(path, state)| {
+            **state == State::Modified && crate::attributes::is_unity_yaml(path)
+        })
+        .filter(|(path, _)| crate::semantic::is_noise_change(repo, path, &rules).unwrap_or(false))
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in noise {
+        flags.remove(&path);
     }
 
     let stashes = repo.run(["stash", "list", "--format=%gd"])?;

@@ -13,5 +13,6 @@ pub mod managed;
 pub mod presence;
 pub mod repo;
 pub mod safety;
+pub mod semantic;
 pub mod setup;
 pub mod unity;

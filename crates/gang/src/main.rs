@@ -4,6 +4,7 @@ mod panel;
 mod plumbing;
 mod presence_cmd;
 mod save_cmd;
+mod semantic_cmd;
 mod setup_cmd;
 mod ui;
 mod version;
@@ -63,6 +64,7 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("save") => save_cmd::save(invocation),
         Some("undo") => save_cmd::undo(invocation),
         Some("who") => presence_cmd::who(invocation),
+        Some("tree") => semantic_cmd::tree(invocation),
         Some("presence-publish") => presence_cmd::publish(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),

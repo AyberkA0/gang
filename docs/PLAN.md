@@ -135,15 +135,15 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** GANG understands Unity files without ever changing a byte it should not.
 
-- [ ] Lossless, lazy parser and writer (DESIGN §11.2).
-- [ ] Round-trip test over the whole corpus; `cargo-fuzz` target; `proptest` round-trip.
-- [ ] Document model, reference extraction, GUID index with cache.
-- [ ] Hierarchy builder including prefab instances and `stripped` documents.
-- [ ] Object addressing (`::` paths, `[n]`, `&fileID`, escaping) and `gang tree`.
-- [ ] Inspector-name table and field nicifying.
-- [ ] Semantic diff and renderer: `diff`, `show`, `log --unity`, per-object lines in `status`.
-- [ ] Noise rules and normalized hash; presence uses it; `restore --noise`; object-level `restore <file>::<object>`.
-- [ ] Benchmarks (`criterion`) on large scenes.
+- [x] Lossless parser and writer (DESIGN §11.2). Documents are parsed whole rather than lazily: 366 MB of real projects parse in about 4 s, the largest scene in 0.15 s.
+- [x] Round-trip test over the whole corpus (`UNITY_CORPUS=<dir> cargo test -p unity-yaml --test corpus`): 11,004 files from two public projects (Unity 2020.3 and Unity 6), 100% byte-for-byte; re-formatting from scratch matches Unity in all but 2 files (trailing blank line). Fuzzing and proptest are still open.
+- [x] Document model, reference extraction, GUID index (no cache yet; a scan is fast enough for now).
+- [x] Hierarchy builder including prefab instances and `stripped` documents; all 30,950 objects in the corpus resolve back from their paths.
+- [x] Object addressing (`::` paths, `[n]`, `&fileID`, escaping) and `gang tree [--depth n]`.
+- [x] Inspector-name table and field nicifying.
+- [x] Semantic diff and renderer: `diff`, `show` (on a terminal), `log --unity`, noise notes in `status`.
+- [x] Noise rules (bake-derived settings, layout-driven RectTransforms, float epsilon, config rules); presence ignores noise-only files; `restore --noise`; object-level `restore <file>::<object>` (also undoes moves).
+- [ ] Benchmarks (`criterion`) on large scenes — timing is measured in the corpus test for now.
 
 **Done when:** 100% of corpus files round-trip byte for byte; indexing a 50 MB scene takes < 500 ms; snapshot tests (`insta`) cover the diff output of 30 hand-made edits.
 

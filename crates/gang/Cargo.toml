@@ -11,8 +11,10 @@ publish.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 gang-core.workspace = true
+gang-merge = { path = "../gang-merge" }
 notify.workspace = true
 ratatui.workspace = true
+unity-yaml = { path = "../unity-yaml" }
 serde_json.workspace = true
 
 [dev-dependencies]

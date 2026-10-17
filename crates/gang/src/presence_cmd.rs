@@ -286,6 +286,23 @@ pub fn status_notes(repo: &Repo) -> Result<Vec<String>> {
     Ok(notes)
 }
 
+/// Unity files whose changes are only noise.
+fn noise_notes(repo: &Repo) -> Result<Vec<String>> {
+    let rules = gang_core::semantic::rules(&Config::load(repo.root()).unwrap_or_default());
+    let changed = gang_core::repo::split_nul(&repo.run(["diff", "--name-only", "-z", "HEAD"])?);
+    let noise: Vec<String> = changed
+        .into_iter()
+        .filter(|p| attributes::is_unity_yaml(p))
+        .take(200)
+        .filter(|p| gang_core::semantic::is_noise_change(repo, p, &rules).unwrap_or(false))
+        .collect();
+    let mut notes: Vec<String> = noise.iter().map(|p| format!("{p}: only noise")).collect();
+    if !notes.is_empty() {
+        notes.push("Run `gang restore --noise` to drop noise-only changes.".to_owned());
+    }
+    Ok(notes)
+}
+
 /// `gang status`: git's status, then team notes when on a terminal.
 pub fn status(invocation: &Invocation, repo: Option<&Repo>) -> Result<i32> {
     let mut args: Vec<OsString> = invocation.git_globals.clone();
@@ -296,6 +313,14 @@ pub fn status(invocation: &Invocation, repo: Option<&Repo>) -> Result<i32> {
         return Ok(code);
     }
     if let Some(repo) = repo {
+        let noise = noise_notes(repo).unwrap_or_default();
+        if !noise.is_empty() {
+            println!();
+            println!("Unity:");
+            for note in noise {
+                println!("  {note}");
+            }
+        }
         let notes = status_notes(repo).unwrap_or_default();
         if !notes.is_empty() {
             println!();

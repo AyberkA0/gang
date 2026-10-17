@@ -15,6 +15,7 @@ GANG commands:
   save [-m msg]    Add every change and commit it, after GANG's checks
   undo             Undo the last save, reset, restore or clean
   who [path]       Who on the team is changing what
+  tree <file>      Show the objects of a scene or prefab
   ignore           Manage ignore rules shared by the team
   git <args>       Run plain git, without GANG's additions
   version          Show GANG, git and git-lfs versions
@@ -52,6 +53,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         Some("version") => crate::version::Args::command().print_help()?,
         Some("ignore") => crate::ignore_cmd::Args::command().print_help()?,
         Some("save") => crate::save_cmd::SaveArgs::command().print_help()?,
+        Some("tree") => crate::semantic_cmd::TreeArgs::command().print_help()?,
         Some(_) => {
             let args = invocation
                 .git_globals
