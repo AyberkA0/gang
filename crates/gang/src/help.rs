@@ -11,6 +11,8 @@ Usage: gang [options] <command> [args]
 GANG commands:
   init             Set up a repository for GANG (or create one)
   clone <repo>     Clone a repository and set it up (owner/repo works)
+  save [-m msg]    Add every change and commit it, after GANG's checks
+  undo             Undo the last save, reset, restore or clean
   ignore           Manage ignore rules shared by the team
   git <args>       Run plain git, without GANG's additions
   version          Show GANG, git and git-lfs versions
@@ -22,6 +24,7 @@ Every other command is passed to git, so `gang status`, `gang log`,
 Options (before the command):
   --raw            Show git's own output, without GANG's additions
   --json           Machine-readable output, where supported
+  --ignore-editor  Run even while Unity has the project open
   -h, --help       Show this help
   -v, --version    Show the GANG version
 
@@ -46,6 +49,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         Some("git") => println!("{GIT_HELP}"),
         Some("version") => crate::version::Args::command().print_help()?,
         Some("ignore") => crate::ignore_cmd::Args::command().print_help()?,
+        Some("save") => crate::save_cmd::SaveArgs::command().print_help()?,
         Some(_) => {
             let args = invocation
                 .git_globals

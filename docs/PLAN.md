@@ -97,14 +97,14 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 
 **Goal:** the mistakes that break Unity projects across machines cannot be committed.
 
-- [ ] Guard engine producing findings (block / warn / auto-fix) shared by hooks and commands.
-- [ ] `.meta` rules: pairing, orphan metas, empty-folder metas, duplicate GUIDs.
-- [ ] Portability: case collisions, Windows-invalid names, trailing dot/space, path length, NFC normalization.
-- [ ] Built-in junk deny list; CRLF normalization; large files outside LFS; signing keys.
-- [ ] Unity version guard (`ProjectVersion.txt` changed locally); editor-open detection.
-- [ ] Wrappers: `add`, `commit`, `rm`, `mv` (two-step case-only renames), `restore`, `reset` (`--hard` confirmation + backup ref), `clean` (`Library/` protection), `checkout` / `switch`, `stash`.
-- [ ] `gang save`; op log; `gang undo` for `save`, `reset`, `clean`, `restore`.
-- [ ] Dangerous-operation confirmations; `push --force` → `--force-with-lease`.
+- [x] Guard engine producing findings (block / warn / auto-fix) shared by hooks and commands.
+- [x] `.meta` rules: pairing, orphan metas, empty-folder metas, duplicate GUIDs.
+- [x] Portability: case collisions, Windows-invalid names, trailing dot/space, path length, NFC normalization.
+- [x] Built-in junk deny list; large files outside LFS; signing keys. (CRLF is normalized by the managed `.gitattributes`.)
+- [x] Unity version guard (`ProjectVersion.txt` changed locally; `GANG_ALLOW_UNITY_UPGRADE=1` allows it); editor-open detection (`Temp/UnityLockfile` lock, still to be confirmed with a real Unity by spike S4).
+- [x] Wrappers: `add`, `commit`, `rm`, `mv` (two-step case-only renames), `restore`, `reset` (`--hard` confirmation + backup ref), `clean` (`Library/` protection), `checkout` / `switch`, `stash`.
+- [x] `gang save`; op log; `gang undo` for `save`, `reset`, `clean`, `restore`.
+- [x] Dangerous-operation confirmations; `push --force` → `--force-with-lease`. The editor guard is skipped with `gang --ignore-editor <command>`.
 
 **Done when:** each guard rule has a fixture repository with the expected findings, run in CI on all three OSes; the team uses GANG for a week on a real project without falling back to git.
 

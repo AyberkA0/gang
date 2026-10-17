@@ -1,16 +1,16 @@
 mod help;
 mod ignore_cmd;
 mod plumbing;
+mod save_cmd;
 mod setup_cmd;
 mod ui;
 mod version;
+mod wrap;
 
 use anyhow::Result;
 use gang_core::commands;
 use gang_core::git::{self, GitError};
 use gang_core::invocation::Invocation;
-use gang_core::repo::Repo;
-use gang_core::setup;
 
 fn main() {
     let invocation = Invocation::parse(std::env::args_os().skip(1));
@@ -49,7 +49,9 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("clone") => setup_cmd::clone(invocation),
         Some("ignore") => ignore_cmd::run(invocation),
         Some("merge-driver") => plumbing::merge_driver(invocation),
-        Some("hook") => Ok(0),
+        Some("hook") => save_cmd::hook(invocation),
+        Some("save") => save_cmd::save(invocation),
+        Some("undo") => save_cmd::undo(invocation),
         Some("config") => match plumbing::config(invocation)? {
             Some(code) => Ok(code),
             None => wrapped(invocation, "config", &[]),
@@ -62,15 +64,10 @@ fn run(invocation: &Invocation) -> Result<i32> {
     }
 }
 
-/// A git command GANG wraps. Its layers are attached as they are implemented
-/// (PLAN.md); until then it runs exactly like git.
+/// A git command GANG wraps (DESIGN.md §8.3).
 fn wrapped(invocation: &Invocation, name: &str, layers: &[commands::Layer]) -> Result<i32> {
-    git::ensure_supported()?;
     debug(|| format!("wrapped `{name}`, layers {layers:?}"));
-    if let Some(repo) = Repo::discover(&invocation.git_globals)? {
-        setup::ensure_installed(&repo)?;
-    }
-    Ok(git::run_inherited(invocation.git_args())?)
+    wrap::run(invocation, name, layers)
 }
 
 /// A command GANG does not know: git runs it unchanged.

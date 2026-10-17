@@ -1025,7 +1025,7 @@ Default LFS families: images (`psd png jpg jpeg tga tif tiff exr hdr`), models (
 ### 18.3 Editor guard
 
 - Unity holds an exclusive lock on `Temp/UnityLockfile` while it runs. GANG tries to take that lock (`fd-lock`); if it cannot, Unity is open. A stale file after a crash is not locked, so it is not mistaken for a running editor.
-- Operations that would rewrite scenes or prefabs while Unity is open are blocked (`sync.editor_open = "block"`), with `--force` to override.
+- Operations that would rewrite scenes or prefabs while Unity is open are blocked (`sync.editor_open = "block"`); `gang --ignore-editor <command>` runs them anyway.
 - Single-file, user-initiated rewrites such as `gang restore <file>::<object>` only warn: `Unity is open: let it reload Level1 before you keep editing.`
 - With an Editor plugin (later), GANG will know which scenes are open and automate save → close → sync → reopen.
 

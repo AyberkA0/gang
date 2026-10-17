@@ -43,7 +43,8 @@ pub fn wrapped_layers(command: &str) -> Option<&'static [Layer]> {
         "fetch" | "ls-remote" | "submodule" | "lfs" => &[Auth],
         "pull" => &[Auth, Editor, Merge],
         "push" => &[Auth, Guard, Locks],
-        "config" | "remote" | "branch" | "tag" | "worktree" | "bugreport" => &[],
+        "config" | "remote" | "branch" | "tag" | "worktree" | "bugreport" | "filter-branch"
+        | "filter-repo" => &[],
         _ => return None,
     };
     Some(layers)

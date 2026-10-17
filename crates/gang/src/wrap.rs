@@ -1,0 +1,597 @@
+//! Wrapped git commands: git runs as usual, with GANG's checks around it
+//! (DESIGN.md §8.3, PLAN.md P4).
+
+use std::collections::BTreeSet;
+use std::ffi::OsString;
+
+use anyhow::Result;
+use gang_core::commands::Layer;
+use gang_core::config::Config;
+use gang_core::invocation::Invocation;
+use gang_core::repo::Repo;
+use gang_core::{git, guards, safety, setup, unity};
+
+use crate::ui;
+
+/// Runs a wrapped git command.
+pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32> {
+    git::ensure_supported()?;
+    let repo = Repo::discover(&invocation.git_globals)?;
+    if let Some(repo) = &repo {
+        setup::ensure_installed(repo)?;
+        if layers.contains(&Layer::Editor) && changes_files(name, &invocation.args) {
+            if let Some(code) = editor_guard(invocation, repo)? {
+                return Ok(code);
+            }
+        }
+    }
+    match (name, repo) {
+        ("add", Some(repo)) => add(invocation, &repo, &invocation.args),
+        ("rm", Some(repo)) => rm(invocation, &repo),
+        ("mv", Some(repo)) => mv(invocation, &repo),
+        ("restore", Some(repo)) => restore(invocation, &repo, false),
+        ("checkout", Some(repo)) => restore(invocation, &repo, true),
+        ("reset", Some(repo)) => reset(invocation, &repo),
+        ("clean", Some(repo)) => clean(invocation, &repo),
+        ("push", _) => push(invocation),
+        ("filter-branch" | "filter-repo", _) => rewrite_history(invocation),
+        _ => git_command(invocation, &invocation.args),
+    }
+}
+
+/// Runs the invocation's command with `args` instead of its own arguments.
+fn git_command(invocation: &Invocation, args: &[OsString]) -> Result<i32> {
+    let mut all = invocation.git_globals.clone();
+    all.extend(invocation.command.clone());
+    all.extend(args.iter().cloned());
+    Ok(git::run_inherited(&all)?)
+}
+
+fn strings(args: &[OsString]) -> Vec<String> {
+    args.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
+}
+
+fn has(args: &[String], options: &[&str]) -> bool {
+    args.iter().any(|a| options.contains(&a.as_str()))
+}
+
+/// Positional arguments, skipping options and the values of `value_options`.
+fn positionals(args: &[String], value_options: &[&str]) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut iter = args.iter();
+    let mut options_done = false;
+    while let Some(arg) = iter.next() {
+        if options_done || !arg.starts_with('-') || arg == "-" {
+            result.push(arg.clone());
+        } else if arg == "--" {
+            options_done = true;
+        } else if value_options.contains(&arg.as_str()) {
+            iter.next();
+        }
+    }
+    result
+}
+
+/// Whether the command can rewrite files in the working tree.
+fn changes_files(name: &str, args: &[OsString]) -> bool {
+    let args = strings(args);
+    let first = positionals(&args, &[]).into_iter().next();
+    match name {
+        "switch" => {
+            !(has(&args, &["-c", "-C", "--create", "--force-create"])
+                && positionals(&args, &["-c", "-C", "--create", "--force-create"]).is_empty())
+        }
+        "checkout" => !(has(&args, &["-b", "-B"]) && positionals(&args, &["-b", "-B"]).is_empty()),
+        "stash" => !matches!(first.as_deref(), Some("list" | "show" | "create" | "store")),
+        "bisect" => !matches!(
+            first.as_deref(),
+            Some("log" | "visualize" | "view" | "terms" | "help")
+        ),
+        "reset" => has(&args, &["--hard", "--merge", "--keep"]),
+        "restore" => !has(&args, &["--staged", "-S"]) || has(&args, &["--worktree", "-W"]),
+        _ => true,
+    }
+}
+
+/// Stops a command while Unity has a project open. `Some(exit code)` when
+/// the command must not run.
+fn editor_guard(invocation: &Invocation, repo: &Repo) -> Result<Option<i32>> {
+    let open: Vec<String> = unity::find_projects(repo.root())
+        .into_iter()
+        .filter(|p| unity::is_editor_open(&p.path(repo.root())))
+        .map(|p| {
+            if p.dir.is_empty() {
+                ".".to_owned()
+            } else {
+                p.dir
+            }
+        })
+        .collect();
+    if open.is_empty() {
+        return Ok(None);
+    }
+    let name = invocation.command_name().unwrap_or("this command");
+    let warn_only = invocation.options.ignore_editor
+        || Config::load(repo.root())
+            .map(|c| c.sync.editor_open == "warn")
+            .unwrap_or(false);
+    if warn_only {
+        ui::warn(format!(
+            "Unity is open ({}). Let it reload changed scenes before you save in Unity.",
+            open.join(", ")
+        ));
+        return Ok(None);
+    }
+    eprintln!(
+        "✗ Unity is open ({}), and `gang {name}` can change scenes and prefabs on disk.",
+        open.join(", ")
+    );
+    ui::hint("Saving in Unity afterwards would overwrite them with the old version.");
+    ui::hint("Save your work and close Unity, then run it again.");
+    ui::hint(format!(
+        "(Use `gang --ignore-editor {name} …` to run it anyway.)"
+    ));
+    Ok(Some(1))
+}
+
+/// The current directory relative to the repository root (`Assets/Scenes/`).
+fn prefix(invocation: &Invocation) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(&invocation.git_globals)
+        .args(["rev-parse", "--show-prefix"])
+        .output()?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// `path` as typed in the current directory → path from the repository root.
+fn repo_path(prefix: &str, path: &str) -> String {
+    let joined = format!("{prefix}{}", path.replace('\\', "/"));
+    let mut parts: Vec<&str> = Vec::new();
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+fn staged_paths(repo: &Repo) -> Result<BTreeSet<String>> {
+    Ok(guards::staged_changes(repo)?
+        .into_iter()
+        .map(|c| format!("{}{}", c.status, c.path))
+        .collect())
+}
+
+/// `gang add`: git add, then the `.meta` partners of what was added, without
+/// OS junk.
+pub fn add(invocation: &Invocation, repo: &Repo, args: &[OsString]) -> Result<i32> {
+    let before = staged_paths(repo)?;
+    let mut all = invocation.git_globals.clone();
+    all.push("add".into());
+    all.extend(args.iter().cloned());
+    let code = git::run_inherited(&all)?;
+    if code != 0 {
+        return Ok(code);
+    }
+    complete_pairs(repo, &before)?;
+    Ok(0)
+}
+
+/// Stages missing `.meta` partners and unstages junk after an add.
+fn complete_pairs(repo: &Repo, before: &BTreeSet<String>) -> Result<()> {
+    let projects = unity::find_projects(repo.root());
+    let index: BTreeSet<String> = repo.tracked_files()?.into_iter().collect();
+    let changes = guards::staged_changes(repo)?;
+
+    let junk: Vec<&str> = changes
+        .iter()
+        .filter(|c| c.adds() && guards::is_junk(&c.path))
+        .map(|c| c.path.as_str())
+        .collect();
+    if !junk.is_empty() {
+        let mut args = vec!["rm", "-q", "--cached", "--"];
+        args.extend(&junk);
+        repo.run(&args)?;
+        for path in &junk {
+            ui::warn(format!("left out {path} (OS junk file)"));
+        }
+    }
+
+    let mut partners: BTreeSet<String> = BTreeSet::new();
+    for change in changes.iter().filter(|c| !guards::is_junk(&c.path)) {
+        if let Some(partner) = guards::meta_partner(&projects, &change.path) {
+            let on_disk = repo.root().join(&partner);
+            if on_disk.is_file() || (!on_disk.exists() && index.contains(&partner)) {
+                partners.insert(partner);
+            }
+        }
+        if change.adds() {
+            for meta in guards::folder_metas(&projects, &change.path) {
+                if repo.root().join(&meta).is_file() {
+                    partners.insert(meta);
+                }
+            }
+        }
+    }
+    if partners.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["add", "--"];
+    args.extend(partners.iter().map(String::as_str));
+    if let Err(err) = repo.run(&args) {
+        ui::warn(format!("could not add .meta partners: {err:#}"));
+        return Ok(());
+    }
+    let after = staged_paths(repo)?;
+    for entry in after.difference(before) {
+        let path = &entry[1..];
+        if partners.contains(path) {
+            ui::done(format!("also added {path}"));
+        }
+    }
+    Ok(())
+}
+
+fn deletions(repo: &Repo) -> Result<BTreeSet<String>> {
+    Ok(guards::staged_changes(repo)?
+        .into_iter()
+        .filter(|c| c.deletes())
+        .map(|c| c.path)
+        .collect())
+}
+
+/// `gang rm`: git rm, then the `.meta` files of what was removed.
+fn rm(invocation: &Invocation, repo: &Repo) -> Result<i32> {
+    let before = deletions(repo)?;
+    let code = git_command(invocation, &invocation.args)?;
+    if code != 0 {
+        return Ok(code);
+    }
+    let removed: Vec<String> = deletions(repo)?.difference(&before).cloned().collect();
+    let projects = unity::find_projects(repo.root());
+    let mut index: BTreeSet<String> = repo.tracked_files()?.into_iter().collect();
+
+    let mut metas: BTreeSet<String> = BTreeSet::new();
+    for path in removed.iter().filter(|p| !p.ends_with(".meta")) {
+        if let Some(meta) = guards::meta_partner(&projects, path) {
+            if index.remove(&meta) {
+                metas.insert(meta);
+            }
+        }
+    }
+    // Folders left empty lose their .meta too, innermost first.
+    for path in &removed {
+        for folder_meta in guards::folder_metas(&projects, path) {
+            let folder = folder_meta.trim_end_matches(".meta");
+            let prefix = format!("{folder}/");
+            let has_children = index
+                .range(prefix.clone()..)
+                .next()
+                .is_some_and(|p| p.starts_with(&prefix));
+            if !has_children && index.remove(&folder_meta) {
+                metas.insert(folder_meta);
+            }
+        }
+    }
+    if metas.is_empty() {
+        return Ok(0);
+    }
+    let args = strings(&invocation.args);
+    let mut rm_args = vec!["rm", "-q"];
+    if has(&args, &["--cached"]) {
+        rm_args.push("--cached");
+    }
+    if has(&args, &["-f", "--force"]) {
+        rm_args.push("-f");
+    }
+    rm_args.push("--");
+    rm_args.extend(metas.iter().map(String::as_str));
+    repo.run(&rm_args)?;
+    for meta in metas {
+        ui::done(format!("also removed {meta}"));
+    }
+    Ok(0)
+}
+
+/// `gang mv`: git mv, moving `.meta` files along, and case-only renames that
+/// work on case-insensitive file systems.
+fn mv(invocation: &Invocation, repo: &Repo) -> Result<i32> {
+    let args = strings(&invocation.args);
+    let paths = positionals(&args, &[]);
+    if paths.len() < 2 || has(&args, &["-n", "--dry-run"]) {
+        return git_command(invocation, &invocation.args);
+    }
+    let prefix = prefix(invocation)?;
+    let (sources, destination) = paths.split_at(paths.len() - 1);
+    let destination = repo_path(&prefix, &destination[0]);
+    let sources: Vec<String> = sources.iter().map(|s| repo_path(&prefix, s)).collect();
+    let into_dir = repo.root().join(&destination).is_dir()
+        && !(sources.len() == 1 && sources[0].eq_ignore_ascii_case(&destination));
+    let index: BTreeSet<String> = repo.tracked_files()?.into_iter().collect();
+    let projects = unity::find_projects(repo.root());
+    let force: Vec<&str> = if has(&args, &["-f", "--force"]) {
+        vec!["-f"]
+    } else {
+        vec![]
+    };
+
+    let mut moves: Vec<(String, String)> = Vec::new();
+    for source in &sources {
+        let target = if into_dir {
+            let name = source.rsplit('/').next().unwrap_or(source);
+            format!("{destination}/{name}")
+        } else {
+            destination.clone()
+        };
+        moves.push((source.clone(), target.clone()));
+        let meta = format!("{source}.meta");
+        let is_asset =
+            !source.ends_with(".meta") && guards::meta_partner(&projects, source).is_some();
+        if is_asset && index.contains(&meta) && !sources.contains(&meta) {
+            moves.push((meta, format!("{target}.meta")));
+        }
+    }
+
+    for (from, to) in &moves {
+        let temp = format!("{to}.gang-rename");
+        let mut command = vec!["mv"];
+        command.extend(&force);
+        if from != to && from.eq_ignore_ascii_case(to) {
+            // A case-only rename: go through a temporary name.
+            let mut first = command.clone();
+            first.extend(["--", from.as_str(), temp.as_str()]);
+            repo.run(&first)?;
+            command.extend(["--", temp.as_str(), to.as_str()]);
+        } else {
+            command.extend(["--", from.as_str(), to.as_str()]);
+        }
+        let output = repo.output(&command)?;
+        if !output.status.success() {
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            return Ok(output.status.code().unwrap_or(1));
+        }
+        if has(&args, &["-v", "--verbose"]) || from.ends_with(".meta") && !sources.contains(from) {
+            ui::done(format!("{from} → {to}"));
+        }
+    }
+    Ok(0)
+}
+
+/// `gang restore` / `gang checkout -- <paths>`: restores `.meta` files with
+/// their assets, and keeps a backup of the working tree.
+fn restore(invocation: &Invocation, repo: &Repo, checkout: bool) -> Result<i32> {
+    let args = strings(&invocation.args);
+    let paths: Vec<String> = if checkout {
+        match args.iter().position(|a| a == "--") {
+            Some(pos) => args[pos + 1..].to_vec(),
+            None => return git_command(invocation, &invocation.args),
+        }
+    } else {
+        positionals(&args, &["-s", "--source", "--pathspec-from-file"])
+    };
+    let prefix = prefix(invocation)?;
+    let index: BTreeSet<String> = repo.tracked_files()?.into_iter().collect();
+    let projects = unity::find_projects(repo.root());
+
+    let mut extra: Vec<OsString> = Vec::new();
+    for path in &paths {
+        let full = repo_path(&prefix, path);
+        if full.ends_with(".meta") {
+            continue;
+        }
+        if let Some(meta) = guards::meta_partner(&projects, &full) {
+            let listed = paths.iter().any(|p| repo_path(&prefix, p) == meta);
+            if index.contains(&meta) && !listed {
+                extra.push(format!(":(top){meta}").into());
+            }
+        }
+    }
+    let mut all_args = invocation.args.clone();
+    if !extra.is_empty() {
+        if !args.iter().any(|a| a == "--") {
+            // Paths after options; add ours after an explicit separator.
+            all_args.retain(|a| !paths.iter().any(|p| a.to_string_lossy() == *p));
+            all_args.push("--".into());
+            all_args.extend(paths.iter().map(OsString::from));
+        }
+        all_args.extend(extra.iter().cloned());
+    }
+
+    let touches_worktree = changes_files("restore", &invocation.args) || checkout;
+    let op = if touches_worktree {
+        Some(safety::begin(
+            repo,
+            if checkout { "checkout" } else { "restore" },
+            true,
+        )?)
+    } else {
+        None
+    };
+    let code = git_command(invocation, &all_args)?;
+    if let Some(op) = op {
+        if code == 0 {
+            safety::finish(repo, op)?;
+        }
+    }
+    Ok(code)
+}
+
+/// `gang reset`: asks before `--hard` and keeps a backup.
+fn reset(invocation: &Invocation, repo: &Repo) -> Result<i32> {
+    let args = strings(&invocation.args);
+    if !has(&args, &["--hard", "--merge", "--keep"]) {
+        return git_command(invocation, &invocation.args);
+    }
+    let changed = repo.run(["status", "--porcelain", "--untracked-files=no"])?;
+    let count = changed.lines().count();
+    if count > 0 && ui::interactive() {
+        let question = format!(
+            "Discard changes to {count} file{}? A backup is kept: `gang undo` brings them back.",
+            if count == 1 { "" } else { "s" }
+        );
+        if !ui::confirm(&question, true)? {
+            return Ok(1);
+        }
+    }
+    let op = safety::begin(repo, "reset", true)?;
+    let code = git_command(invocation, &invocation.args)?;
+    if code == 0 {
+        safety::finish(repo, op)?;
+    }
+    Ok(code)
+}
+
+/// `gang clean`: never deletes Unity's `Library/` unless asked, and shows
+/// what will go first.
+fn clean(invocation: &Invocation, repo: &Repo) -> Result<i32> {
+    let mut args: Vec<OsString> = invocation.args.clone();
+    let include_library = args.iter().any(|a| a == "--include-library");
+    args.retain(|a| a != "--include-library");
+    if !include_library {
+        args.extend(["-e".into(), "[Ll]ibrary/".into()]);
+    }
+    let text = strings(&args);
+    let dry_run = has(&text, &["-n", "--dry-run", "-i", "--interactive"]);
+    let forced = text
+        .iter()
+        .any(|a| a == "--force" || (a.starts_with('-') && !a.starts_with("--") && a.contains('f')));
+    if forced && !dry_run && ui::interactive() {
+        let mut preview = vec!["clean".to_owned(), "-n".to_owned()];
+        preview.extend(text.iter().cloned());
+        let listing = repo.run(&preview)?;
+        if listing.trim().is_empty() {
+            println!("Nothing to clean.");
+            return Ok(0);
+        }
+        print!("{listing}");
+        if !ui::confirm("Delete these?", false)? {
+            return Ok(1);
+        }
+    }
+    let op = if forced && !dry_run {
+        Some(safety::begin(repo, "clean", true)?)
+    } else {
+        None
+    };
+    let code = git_command(invocation, &args)?;
+    if let Some(op) = op {
+        if code == 0 {
+            safety::finish(repo, op)?;
+        }
+    }
+    Ok(code)
+}
+
+/// `gang push`: `--force` becomes `--force-with-lease`, and force-pushing
+/// the default branch asks first.
+fn push(invocation: &Invocation) -> Result<i32> {
+    let mut forced = false;
+    let has_lease = invocation
+        .args
+        .iter()
+        .any(|a| a.to_string_lossy().starts_with("--force-with-lease"));
+    let args: Vec<OsString> = invocation
+        .args
+        .iter()
+        .map(|arg| {
+            let text = arg.to_string_lossy();
+            if (text == "--force" || text == "-f") && !has_lease {
+                forced = true;
+                OsString::from("--force-with-lease")
+            } else {
+                if text.starts_with("--force") || text == "-f" {
+                    forced = true;
+                }
+                arg.clone()
+            }
+        })
+        .collect();
+    if forced && ui::interactive() {
+        let text = strings(&args);
+        let refs = positionals(
+            &text,
+            &["-o", "--push-option", "--repo", "--receive-pack", "--exec"],
+        );
+        let targets_default = refs.iter().skip(1).any(|r| {
+            let dest = r.rsplit(':').next().unwrap_or(r);
+            matches!(
+                dest.trim_start_matches('+')
+                    .trim_start_matches("refs/heads/"),
+                "main" | "master"
+            )
+        }) || (refs.len() <= 1 && current_branch_is_default());
+        if targets_default
+            && !ui::confirm(
+                "Force-push the default branch? Teammates' work on it can be lost.",
+                false,
+            )?
+        {
+            return Ok(1);
+        }
+    }
+    git_command(invocation, &args)
+}
+
+fn current_branch_is_default() -> bool {
+    std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "-q", "HEAD"])
+        .output()
+        .map(|o| matches!(String::from_utf8_lossy(&o.stdout).trim(), "main" | "master"))
+        .unwrap_or(false)
+}
+
+/// `gang filter-branch` / `gang filter-repo`: history rewrites ask twice.
+fn rewrite_history(invocation: &Invocation) -> Result<i32> {
+    if ui::interactive() {
+        println!("This rewrites history. Everyone on the team will have to re-clone or reset.");
+        if !ui::confirm("Rewrite history?", false)? || !ui::confirm("Really?", false)? {
+            return Ok(1);
+        }
+    }
+    git_command(invocation, &invocation.args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn os(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn which_commands_change_files() {
+        assert!(!changes_files("switch", &os(&["-c", "topic"])));
+        assert!(changes_files(
+            "switch",
+            &os(&["-c", "topic", "origin/main"])
+        ));
+        assert!(changes_files("switch", &os(&["main"])));
+        assert!(!changes_files("checkout", &os(&["-b", "topic"])));
+        assert!(changes_files("checkout", &os(&["main"])));
+        assert!(!changes_files("stash", &os(&["list"])));
+        assert!(changes_files("stash", &os(&[])));
+        assert!(changes_files("stash", &os(&["pop"])));
+        assert!(!changes_files("reset", &os(&["HEAD~1"])));
+        assert!(changes_files("reset", &os(&["--hard"])));
+        assert!(!changes_files("restore", &os(&["--staged", "a.txt"])));
+        assert!(changes_files("restore", &os(&["a.txt"])));
+    }
+
+    #[test]
+    fn repo_paths() {
+        assert_eq!(repo_path("", "Assets/a.png"), "Assets/a.png");
+        assert_eq!(repo_path("Assets/Art/", "a.png"), "Assets/Art/a.png");
+        assert_eq!(repo_path("Assets/Art/", "../b.png"), "Assets/b.png");
+        assert_eq!(
+            repo_path("Assets/", "./Scenes\\x.unity"),
+            "Assets/Scenes/x.unity"
+        );
+    }
+}

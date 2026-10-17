@@ -14,6 +14,8 @@ pub struct Options {
     pub raw: bool,
     /// `--json`: machine-readable output where supported.
     pub json: bool,
+    /// `--ignore-editor`: run even while Unity has the project open.
+    pub ignore_editor: bool,
     /// `-h` / `--help`.
     pub help: bool,
     /// `-v` / `--version`.
@@ -58,6 +60,7 @@ impl Invocation {
             match text {
                 "--raw" => invocation.options.raw = true,
                 "--json" => invocation.options.json = true,
+                "--ignore-editor" => invocation.options.ignore_editor = true,
                 "-h" | "--help" => invocation.options.help = true,
                 "-v" | "--version" => invocation.options.version = true,
                 _ if GIT_GLOBALS_WITH_VALUE.contains(&text) => {
