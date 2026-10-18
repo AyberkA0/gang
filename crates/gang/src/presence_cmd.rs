@@ -98,10 +98,18 @@ fn detach(command: &mut Command) {
 #[cfg(windows)]
 fn detach(command: &mut Command) {
     use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    command.creation_flags(DETACH_FLAGS);
 }
+
+/// A hidden console of its own, in its own process group (Ctrl+C in the
+/// terminal does not stop it). Not `DETACHED_PROCESS`: a process without any
+/// console makes Windows open a new console window for every `git` it runs.
+#[cfg(windows)]
+const DETACH_FLAGS: u32 = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
 #[cfg(not(any(unix, windows)))]
 fn detach(_command: &mut Command) {}
@@ -374,4 +382,16 @@ pub fn status(invocation: &Invocation, repo: Option<&Repo>) -> Result<i32> {
         }
     }
     Ok(code)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_publisher_gets_a_hidden_console() {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        assert_eq!(DETACH_FLAGS & DETACHED_PROCESS, 0);
+        assert_ne!(DETACH_FLAGS & CREATE_NO_WINDOW, 0);
+    }
 }

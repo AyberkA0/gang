@@ -167,3 +167,44 @@ fn concurrent_publishers_never_lose_updates() {
         assert_eq!(parents.stdout, "1\n", "{user}");
     }
 }
+
+#[test]
+fn commands_publish_in_the_background() {
+    let team = Team::new(&["alice"]);
+    team.write("alice", SCENE, "%YAML 1.1\n# changed\n");
+    // `add` changes state, so it starts `gang presence-publish` detached.
+    let add = team
+        .sandbox
+        .command(GANG)
+        .current_dir(team.sandbox.dir.path().join("alice"))
+        .env_remove("GANG_NO_PRESENCE")
+        .args(["add", SCENE])
+        .output()
+        .unwrap();
+    assert!(add.status.success(), "{add:?}");
+
+    let remote = team.sandbox.dir.path().join("remote.git");
+    let published = (0..150).any(|_| {
+        let refs = team.sandbox.run_in(
+            "",
+            "git",
+            &[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "for-each-ref",
+                "refs/gang/presence/alice",
+            ],
+        );
+        if refs.stdout.is_empty() {
+            thread::sleep(std::time::Duration::from_millis(200));
+            false
+        } else {
+            true
+        }
+    });
+    assert!(published, "the background publisher never pushed");
+    assert_eq!(
+        team.seen("alice", "alice"),
+        vec![(SCENE.to_owned(), "modified".to_owned())]
+    );
+}
