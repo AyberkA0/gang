@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use gang_core::config::{Config, parse_duration};
-use gang_core::presence::{self, Presence, State};
+use gang_core::presence::{self, Notice, Presence, State};
 use gang_core::repo::Repo;
 use gang_core::{attributes, clock};
 use notify::{RecursiveMode, Watcher};
@@ -23,6 +23,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{DefaultTerminal, Frame};
+
+/// Notices older than this are no longer shown.
+const NOTICE_MAX_AGE: i64 = 24 * 3600;
 
 /// Folders whose changes never matter to the team.
 const IGNORED: &[&str] = &[
@@ -239,9 +242,12 @@ fn run_outside(terminal: DefaultTerminal, args: &[&str]) -> Result<DefaultTermin
 fn draw(frame: &mut Frame, view: &View, offline_after: i64) {
     let now = clock::now();
     let lock_rows = view.locks.len().min(6) as u16;
-    let [team_area, locks_area, mine_area, status_area] = Layout::vertical([
+    let notices = recent_notices(view, now);
+    let notice_rows = notices.len() as u16;
+    let [team_area, locks_area, notices_area, mine_area, status_area] = Layout::vertical([
         Constraint::Length(view.team.len().max(1) as u16 + 3),
         Constraint::Length(if lock_rows == 0 { 0 } else { lock_rows + 2 }),
+        Constraint::Length(if notice_rows == 0 { 0 } else { notice_rows + 2 }),
         Constraint::Min(4),
         Constraint::Length(2),
     ])
@@ -276,6 +282,17 @@ fn draw(frame: &mut Frame, view: &View, offline_after: i64) {
         frame.render_widget(
             Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" LOCKS ")),
             locks_area,
+        );
+    }
+
+    if notice_rows > 0 {
+        let lines: Vec<Line> = notices
+            .iter()
+            .map(|(user, notice)| notice_line(user, notice, &view.me.user, now))
+            .collect();
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" NOTICES ")),
+            notices_area,
         );
     }
 
@@ -381,6 +398,54 @@ fn draw(frame: &mut Frame, view: &View, offline_after: i64) {
         ),
     ]);
     frame.render_widget(Paragraph::new(keys), status_area);
+}
+
+/// The team's notices from the last day, newest first, at most four.
+fn recent_notices(view: &View, now: i64) -> Vec<(&str, &Notice)> {
+    let mut notices: Vec<(i64, &str, &Notice)> = std::iter::once(&view.me)
+        .chain(&view.team)
+        .flat_map(|p| p.notices.iter().map(move |n| (p.user.as_str(), n)))
+        .filter_map(|(user, n)| clock::parse(&n.ts).map(|ts| (ts, user, n)))
+        .filter(|(ts, _, _)| now - ts <= NOTICE_MAX_AGE)
+        .collect();
+    notices.sort_by_key(|(ts, _, _)| std::cmp::Reverse(*ts));
+    notices
+        .into_iter()
+        .take(4)
+        .map(|(_, user, n)| (user, n))
+        .collect()
+}
+
+fn notice_line(user: &str, notice: &Notice, me: &str, now: i64) -> Line<'static> {
+    let who = if user == me { "you" } else { user };
+    let text = match notice.kind.as_str() {
+        "force_unlock" => {
+            let holder = match notice.from.as_deref() {
+                Some(from) if from == me => " (your lock)".to_owned(),
+                Some(from) => format!(" (held by {from})"),
+                None => String::new(),
+            };
+            format!("{who} force-unlocked {}{holder}", notice.target)
+        }
+        "history_rewrite" => format!(
+            "{who} rewrote the history of {}; re-clone or reset to it",
+            notice.target
+        ),
+        other => format!("{who}: {other} {}", notice.target),
+    };
+    let mine = notice.from.as_deref() == Some(me) || notice.kind == "history_rewrite";
+    let color = if mine && user != me {
+        Color::Red
+    } else {
+        Color::Yellow
+    };
+    let ago = clock::parse(&notice.ts)
+        .map(|t| clock::ago(now - t))
+        .unwrap_or_default();
+    Line::from(vec![
+        Span::styled(format!(" ⚠ {text}"), Style::default().fg(color)),
+        Span::styled(format!("  {ago}"), Style::default().fg(Color::DarkGray)),
+    ])
 }
 
 fn person_line(person: &Presence, you: bool, online: bool, now: i64) -> Line<'static> {
@@ -506,5 +571,59 @@ mod tests {
         assert!(text.contains("offline 1 h ago"));
         assert!(text.contains("⚠ also changed by mehmet"));
         assert!(text.contains("✗ also changed by zeynep; cannot be merged"));
+        assert!(!text.contains("NOTICES"));
+    }
+
+    #[test]
+    fn draws_recent_notices() {
+        let now = clock::now();
+        let notice = |ts: i64, kind: &str, target: &str, from: Option<&str>| Notice {
+            ts: clock::format(ts),
+            kind: kind.into(),
+            target: target.into(),
+            from: from.map(Into::into),
+        };
+        let mut zeynep = person("zeynep", now, &[]);
+        zeynep.notices = vec![
+            notice(
+                now - 2 * 86_400,
+                "force_unlock",
+                "Assets/Old.psd",
+                Some("ayberk"),
+            ),
+            notice(
+                now - 600,
+                "force_unlock",
+                "Assets/Art/UI/Logo.psd",
+                Some("ayberk"),
+            ),
+        ];
+        let mut mehmet = person("mehmet", now, &[]);
+        mehmet.notices = vec![notice(now - 60, "history_rewrite", "main", None)];
+        let view = View {
+            title: "forest-run".into(),
+            me: person("ayberk", now, &[]),
+            team: vec![zeynep, mehmet],
+            locks: Vec::new(),
+            synced_at: Some(now),
+            status: String::new(),
+        };
+        let shown = recent_notices(&view, now);
+        assert_eq!(shown.len(), 2);
+        assert_eq!(shown[0].0, "mehmet");
+
+        let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+        terminal.draw(|frame| draw(frame, &view, 300)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("NOTICES"));
+        assert!(text.contains("zeynep force-unlocked Assets/Art/UI/Logo.psd (your lock)"));
+        assert!(text.contains("mehmet rewrote the history of main"));
+        assert!(!text.contains("Assets/Old.psd"));
     }
 }

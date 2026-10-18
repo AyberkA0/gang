@@ -5,14 +5,16 @@
 A terminal version-control tool for Unity teams, built on top of git and GitHub.
 
 - **Scenes and prefabs merge object by object.** Two people can change the same scene; GANG only asks when both changed the same property, with a quick question instead of conflict markers (`gang bang`).
-- **See who is changing what** before it conflicts (`gang who`, or `gang` for a live panel).
+- **See who is changing what** before it conflicts (`gang who`, or `gang` for a live panel with the team, locks and notices).
 - **Lock** files, or objects inside a scene with the scripts and objects around them (`gang lock`).
 - **One setup on macOS, Windows and Linux**: shared ignore rules, LF line endings, `.meta` files kept with their assets, OS junk and unportable names stopped before they are committed.
 - **Every git command still works**: `gang status`, `gang log`, `gang rebase -i` …
 
 ## Status
 
-Early, working. Tested on macOS against two public Unity projects (11,000 files); not yet used by a team in Unity day to day.
+Early, working. All five milestones of the [plan](docs/PLAN.md) are reached: safe git, team awareness, scene merging, locks, and release tooling. The test suite passes on macOS, Windows and Linux, and the Unity YAML parser round-trips two public Unity projects (11,000 files) byte for byte. Not yet used by a team in Unity day to day.
+
+Still open: registering GANG's GitHub OAuth App (until then, sign in with your existing git credentials), merge fixtures made in a real Unity editor, and a Homebrew tap / Scoop bucket.
 
 ## Install
 
@@ -33,6 +35,16 @@ From source (Rust 1.85 or newer, git 2.34 or newer, Git LFS):
 ```bash
 cargo install --path crates/gang
 ```
+
+## Building and testing
+
+```bash
+cargo build --release           # binary in target/release/gang
+cargo test --workspace          # unit, merge and multi-user integration tests
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+The workspace has five crates: `gang` (the CLI and team panel), `gang-core` (git runner, auth, presence, locks, guards), `unity-yaml` (lossless Unity YAML parser), `gang-merge` (semantic diff and merge) and `gang-csharp` (C# type index for lock levels).
 
 ## Quick start
 

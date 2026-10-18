@@ -8,8 +8,9 @@ use anyhow::Result;
 use gang_core::commands::Layer;
 use gang_core::config::Config;
 use gang_core::invocation::Invocation;
+use gang_core::presence::{self, Notice};
 use gang_core::repo::Repo;
-use gang_core::{git, guards, safety, setup, unity};
+use gang_core::{clock, git, guards, safety, setup, unity};
 
 use crate::ui;
 
@@ -55,7 +56,7 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
             }
             Ok(code)
         }
-        ("filter-branch" | "filter-repo", _) => rewrite_history(invocation),
+        ("filter-branch" | "filter-repo", repo) => rewrite_history(invocation, repo.as_ref()),
         ("merge" | "rebase" | "cherry-pick" | "revert" | "stash" | "pull", Some(repo)) => {
             let aborting = invocation
                 .args
@@ -688,15 +689,35 @@ fn current_branch_is_default() -> bool {
         .unwrap_or(false)
 }
 
-/// `gang filter-branch` / `gang filter-repo`: history rewrites ask twice.
-fn rewrite_history(invocation: &Invocation) -> Result<i32> {
+/// `gang filter-branch` / `gang filter-repo`: history rewrites ask twice,
+/// and a successful one is announced to the team (DESIGN.md §8.5).
+fn rewrite_history(invocation: &Invocation, repo: Option<&Repo>) -> Result<i32> {
     if ui::interactive() {
         println!("This rewrites history. Everyone on the team will have to re-clone or reset.");
         if !ui::confirm("Rewrite history?", false)? || !ui::confirm("Really?", false)? {
             return Ok(1);
         }
     }
-    git_command(invocation, &invocation.args)
+    let code = git_command(invocation, &invocation.args)?;
+    if let Some(repo) = repo.filter(|r| code == 0 && setup::is_gang_repo(r)) {
+        let branch = repo
+            .try_run(["symbolic-ref", "--short", "-q", "HEAD"])?
+            .map(|b| b.trim().to_owned())
+            .filter(|b| !b.is_empty())
+            .unwrap_or_else(|| "HEAD".to_owned());
+        presence::add_notice(
+            repo,
+            Notice {
+                ts: clock::format(clock::now()),
+                kind: "history_rewrite".into(),
+                target: branch,
+                from: None,
+            },
+        )?;
+        crate::presence_cmd::spawn_publish(repo);
+        println!("The team has been told that history was rewritten.");
+    }
+    Ok(code)
 }
 
 #[cfg(test)]

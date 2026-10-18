@@ -1,6 +1,6 @@
 # GANG — Implementation Plan
 
-> Status: Draft v0.1 · 2026-10-17
+> Status: Draft v0.1 · 2026-10-18
 > What to build is specified in [DESIGN.md](DESIGN.md); how a team uses it is shown in [WORKFLOW.md](WORKFLOW.md). This document says **in which order** to build it and **how we know each step is done**.
 
 ---
@@ -49,7 +49,7 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 - [x] Layer registry mapping each wrapped command to its layers (DESIGN §8.1, §8.3).
 - [ ] Layer `before` / `after` hooks and the flag-sniffing helper — added with the first real layer (P3/P4).
 - [x] `--raw` and `--json` parsed; GANG options go before the command (`gang --raw log`), since `gang log --raw` is git's flag.
-- [ ] TTY detection, `NO_COLOR`, `--yes` — added with the first output or prompt that needs them.
+- [x] TTY detection, `NO_COLOR`, `--yes`.
 - [x] Git runner: inherited runs, version detection, error mapping with per-OS install hints.
 - [ ] Capture helpers and `-z` output parsers — added with P4/P5.
 - [x] Minimum git version decided: **2.34** (Ubuntu 22.04's git; Apple's bundled git passes). git-lfs is reported by `gang version` and enforced in P3.
@@ -122,10 +122,10 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 - [x] Presence model with deterministic JSON; `seq` persisted in `.git/gang/state.json`.
 - [x] Flag computation from status, upstream diff and stash; `since` tracking; clearing rules (DESIGN §9.2).
 - [x] File watcher (`notify`, own debounce) with ignored folders; heartbeat; poller using `ls-remote` tip comparison. Outside the panel, every state-changing `gang` command and the post-commit/checkout/merge hooks publish in a detached background process.
-- [ ] Clock-skew detection from GitHub's `Date` header — needs the GitHub API client from P2.
+- [x] Clock-skew detection from GitHub's `Date` header (`gang auth status`).
 - [x] `gang who [path]`; teammates' flags in `gang status`; overlap warnings (yellow for Unity YAML, red for binary).
-- [ ] Notices (force unlock, history rewrite) — the field exists; filled in by P9.
-- [x] Team panel v1 (`ratatui`): team, my changes with overlap warnings; keys `q`, `r`, `s` (save). Locks, notices and the `sync`/`bang` keys are added with P8/P9.
+- [x] Notices: `gang unlock --force` and `gang filter-branch` / `filter-repo` publish them; the panel shows the last day's, newest first.
+- [x] Team panel v1 (`ratatui`): team, my changes with overlap warnings; keys `q`, `r`, `s` (save), `y` (sync), `b` (bang); locks and notices.
 
 **Done when:** the multi-user harness runs 4 simulated users (4 clones of a local bare remote, then once against GitHub) changing files for 30 minutes: no lost updates, the presence ref always has exactly one commit, 95% of changes are visible to others within 20 s.
 

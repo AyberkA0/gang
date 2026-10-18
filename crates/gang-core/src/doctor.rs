@@ -373,7 +373,7 @@ fn hotspots(repo: &Repo) -> Result<Vec<Check>> {
         }
     }
     let mut top: Vec<(String, usize)> = counts.into_iter().filter(|(_, n)| *n >= 3).collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.sort_by_key(|a| std::cmp::Reverse(a.1));
     Ok(top
         .into_iter()
         .take(5)

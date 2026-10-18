@@ -113,7 +113,9 @@ fn new_folder_needs_its_meta() {
 fn case_only_differences_and_windows_names_are_blocked() {
     let sandbox = project();
     // Staged directly: on macOS and Windows the file system cannot hold both
-    // spellings, which is exactly the problem.
+    // spellings, which is exactly the problem. Git for Windows refuses
+    // NTFS-invalid names in the index unless told otherwise.
+    sandbox.git(&["config", "core.protectNTFS", "false"]);
     for path in ["Assets/art/Logo.png", "Assets/Bad:Name.txt"] {
         let blob = sandbox
             .command("git")

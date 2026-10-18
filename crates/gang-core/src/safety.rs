@@ -231,6 +231,9 @@ mod tests {
     fn repo() -> (tempfile::TempDir, Repo) {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-q", "-b", "main"]);
+        // Repo::run reads the system config, where Git for Windows turns on
+        // autocrlf.
+        git(dir.path(), &["config", "core.autocrlf", "false"]);
         fs::write(dir.path().join("a.txt"), "one\n").unwrap();
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-q", "-m", "first"]);
