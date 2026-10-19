@@ -491,3 +491,27 @@ fn several_messages_become_paragraphs() {
         .run_in("alice", "git", &["log", "-1", "--format=%B"]);
     assert_eq!(log.stdout.trim_end(), "Faster player\n\nSpeed 1 felt slow.");
 }
+
+/// Field test A5: during Bob's unfinished merge, Alice's own files must not
+/// show up as Bob's work.
+#[test]
+fn an_unfinished_merge_is_not_published_as_own_work() {
+    let team = Team::new();
+    let new_script = "Assets/Scripts/Door.cs";
+    team.write("alice", new_script, "class Door {}\n");
+    team.write(
+        "alice",
+        &format!("{new_script}.meta"),
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000dddd\n",
+    );
+    team.write("alice", SCENE, &scene("0", "3", ""));
+    assert_eq!(team.sync("alice", "door").code, Some(0));
+    team.write("bob", SCENE, &scene("0", "4", ""));
+    assert_eq!(team.sync("bob", "bob jump").code, Some(1));
+
+    assert_eq!(team.gang("bob", &["presence-publish", "--force"]).code, Some(0));
+    let who = team.gang("alice", &["--json", "who"]);
+    let bob = who.stdout.split("\"user\":").find(|p| p.contains("\"bob\"")).unwrap_or("");
+    assert!(bob.contains(SCENE), "bob did change the scene: {}", who.stdout);
+    assert!(!bob.contains(new_script), "Alice's file shown as Bob's: {}", who.stdout);
+}

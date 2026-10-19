@@ -231,7 +231,10 @@ pub fn compute_flags(repo: &Repo, upstream: Option<&str>) -> Result<BTreeMap<Str
             '?' => {
                 flags.insert(entry[2..].to_owned(), State::Added);
             }
-            '1' | '2' | 'u' => {
+            // Unmerged files: git only merges committed work, so the
+            // upstream comparison below reports them as unpushed.
+            'u' => {}
+            '1' | '2' => {
                 let fields: Vec<&str> = entry
                     .splitn(
                         if kind == '1' {
@@ -262,6 +265,35 @@ pub fn compute_flags(repo: &Repo, upstream: Option<&str>) -> Result<BTreeMap<Str
             }
             _ => {}
         }
+    }
+
+    // During a merge, files that match the merged side came from a teammate:
+    // they are not this user's work (field test A5).
+    if repo
+        .try_run(["rev-parse", "-q", "--verify", "MERGE_HEAD"])?
+        .is_some()
+    {
+        let differs: std::collections::BTreeSet<String> = split_nul(&repo.run([
+            "--no-optional-locks",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "MERGE_HEAD",
+        ])?)
+        .into_iter()
+        .collect();
+        let in_merged_side = |path: &str| {
+            repo.try_run(["cat-file", "-e", &format!("MERGE_HEAD:{path}")])
+                .ok()
+                .flatten()
+                .is_some()
+        };
+        // Kept: what differs from their version, and new files they do not
+        // have (an untracked file is ours whatever the merge does).
+        flags.retain(|path, state| {
+            differs.contains(path) || (*state != State::Deleted && !in_merged_side(path))
+        });
     }
 
     if let Some(upstream) = upstream {
