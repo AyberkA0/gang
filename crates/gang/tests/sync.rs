@@ -1000,3 +1000,65 @@ fn layer_clash_through_plain_git_explains_itself() {
     );
     assert!(list.stdout.contains("gang merge --abort"), "{list:?}");
 }
+
+/// DESIGN G2 / HARDENING §1.3: a Unity file GANG cannot read (here: not
+/// UTF-8) never gets conflict markers. A clean line merge is kept; an
+/// overlapping one leaves the file as it was and asks for the whole file.
+#[test]
+fn unreadable_unity_files_never_get_conflict_markers() {
+    let team = Team::new();
+    let path = "Assets/Scenes/Broken.unity";
+    let version = |a: &str, b: &str| -> Vec<u8> {
+        let mut bytes = b"%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: Caf\xe9\n".to_vec();
+        bytes.extend_from_slice(
+            format!("  m_Layer: {a}\n  m_TagString: Untagged\n  m_StaticEditorFlags: {b}\n")
+                .as_bytes(),
+        );
+        bytes
+    };
+    let write = |user: &str, bytes: &[u8]| {
+        std::fs::write(team.sandbox.dir.path().join(user).join(path), bytes).unwrap();
+    };
+    for user in ["alice", "bob"] {
+        write(user, &version("0", "0"));
+        team.write(
+            user,
+            &format!("{path}.meta"),
+            "fileFormatVersion: 2\nguid: 0000000000000000000000000000beef\n",
+        );
+    }
+    assert_eq!(team.sync("alice", "broken scene").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    // The same line changed on both sides: no markers, a whole-file question.
+    write("alice", &version("3", "0"));
+    assert_eq!(team.sync("alice", "alice layer").code, Some(0));
+    write("bob", &version("4", "0"));
+    let sync = team.sync("bob", "bob layer");
+    assert_eq!(sync.code, Some(1), "{sync:?}");
+    let bytes = std::fs::read(team.sandbox.dir.path().join("bob").join(path)).unwrap();
+    assert!(
+        !bytes.windows(7).any(|w| w == b"<<<<<<<"),
+        "markers written"
+    );
+    assert_eq!(bytes, version("4", "0"));
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert!(
+        list.stdout
+            .contains("Broken.unity  (text or binary conflict)"),
+        "{list:?}"
+    );
+    let bang = team.gang("bob", &["bang", "--answer", "theirs"]);
+    assert_eq!(bang.code, Some(0), "{bang:?}");
+    let bytes = std::fs::read(team.sandbox.dir.path().join("bob").join(path)).unwrap();
+    assert_eq!(bytes, version("3", "0"));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    // Different lines: the clean line merge is kept.
+    write("alice", &version("3", "1"));
+    assert_eq!(team.sync("alice", "static").code, Some(0));
+    write("bob", &version("5", "0"));
+    assert_eq!(team.sync("bob", "layer 5").code, Some(0));
+    let bytes = std::fs::read(team.sandbox.dir.path().join("bob").join(path)).unwrap();
+    assert_eq!(bytes, version("5", "1"));
+}

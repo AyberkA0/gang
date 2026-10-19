@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use gang_core::invocation::Invocation;
 use gang_core::managed::{self, Kind};
 use gang_core::repo::Repo;
-use gang_core::{config, git, layers, store};
+use gang_core::{config, layers, store};
 
 /// `gang merge-driver <unity|ignore> <base> <ours> <theirs> [path]`: git's
 /// merge driver. Writes the result to `<ours>`; exits non-zero on conflicts.
@@ -41,7 +41,9 @@ pub fn merge_driver(invocation: &Invocation) -> Result<i32> {
 }
 
 /// Semantic merge of a Unity YAML or JSON file. Binary files and files that
-/// do not parse fall back to git's own text merge.
+/// do not parse get git's text merge only when it is clean: conflict
+/// markers are never written into these files (DESIGN.md G2). Otherwise
+/// the file keeps the current side and `gang bang` asks for the whole file.
 fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) -> Result<i32> {
     let read = |p: &str| fs::read(p).with_context(|| format!("could not read {p}"));
     let (b, o, t) = (read(base)?, read(ours)?, read(theirs)?);
@@ -51,10 +53,10 @@ fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) 
     }
     let text = |bytes: Vec<u8>| String::from_utf8(bytes).ok();
     let (Some(b), Some(o), Some(t)) = (text(b), text(o), text(t)) else {
-        return text_merge(base, ours, theirs);
+        return clean_text_merge(base, ours, theirs, kind);
     };
     let Some(repo) = gang_core::repo::Repo::discover(&[])? else {
-        return text_merge(base, ours, theirs);
+        return clean_text_merge(base, ours, theirs, kind);
     };
     let config = gang_core::config::Config::load(repo.root()).unwrap_or_default();
     let rules = gang_core::semantic::rules(&config);
@@ -90,9 +92,42 @@ fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) 
             fs::write(ours, merged)?;
             Ok(if conflicts { 1 } else { 0 })
         }
-        None if rebasing => text_merge_labelled(base, ours, theirs, ["upstream", "yours"]),
-        None => text_merge(base, ours, theirs),
+        None => clean_text_merge(base, ours, theirs, kind),
     }
+}
+
+/// git's line merge, kept only when it has no conflicts and its result is
+/// still a valid file when the inputs were. Otherwise `<ours>` is left as
+/// it is (a valid file) and the merge reports a conflict.
+fn clean_text_merge(base: &str, ours: &str, theirs: &str, kind: &str) -> Result<i32> {
+    let output = std::process::Command::new("git")
+        .args([
+            "merge-file",
+            "-p",
+            "-L",
+            "ours",
+            "-L",
+            "base",
+            "-L",
+            "theirs",
+        ])
+        .args([ours, base, theirs])
+        .output()?;
+    if output.status.code() != Some(0) {
+        return Ok(1);
+    }
+    let merged = output.stdout;
+    let parses = |bytes: &[u8]| match std::str::from_utf8(bytes) {
+        Ok(text) if kind == "json" => serde_json::from_str::<serde_json::Value>(text).is_ok(),
+        Ok(text) => unity_yaml::parse(text).is_ok(),
+        Err(_) => false,
+    };
+    let ours_parsed = fs::read(ours).map(|b| parses(&b)).unwrap_or(false);
+    if ours_parsed && !parses(&merged) {
+        return Ok(1);
+    }
+    fs::write(ours, merged)?;
+    Ok(0)
 }
 
 /// A name for the other side of the merge: the merged branch's author, or
@@ -112,26 +147,6 @@ fn other_side_name(repo: &gang_core::repo::Repo) -> String {
         }
     }
     "the other side".to_owned()
-}
-
-fn text_merge(base: &str, ours: &str, theirs: &str) -> Result<i32> {
-    text_merge_labelled(base, ours, theirs, ["ours", "theirs"])
-}
-
-fn text_merge_labelled(base: &str, ours: &str, theirs: &str, labels: [&str; 2]) -> Result<i32> {
-    let code = git::run_inherited([
-        "merge-file",
-        "-L",
-        labels[0],
-        "-L",
-        "base",
-        "-L",
-        labels[1],
-        ours,
-        base,
-        theirs,
-    ])?;
-    Ok(code.clamp(0, 1))
 }
 
 /// `gang config --project <key> [<value>]`; any other `gang config` is git's.
