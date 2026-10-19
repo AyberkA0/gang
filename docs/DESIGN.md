@@ -733,6 +733,16 @@ GANG compares the two versions of every changed prefab. Objects are matched by t
 
 A field renamed in code with `[FormerlySerializedAs("speed")] float moveSpeed;` makes Unity write `moveSpeed:` into the scenes and prefabs of whoever renamed it, while a teammate's files still say `speed:`. Merged key by key, the teammate's change to `speed` would be dropped or become a meaningless question. Before merging a Unity file, the merge driver reads the `FormerlySerializedAs` renames from the scripts of its MonoBehaviours, in every version it can reach (HEAD, the heads git is merging, the operation's head files and the working tree), and writes an old key under its new name in all three versions. The teammate's value then lands in the renamed field. Prefab instances' overrides whose `propertyPath` names the old field (`speed`, `speed.x`) are renamed the same way; the script behind each override's target is found by opening the source prefab.
 
+### 13.11 Deleted assets still in use
+
+"Alice deleted `Red.mat`" and "Bob put `Red.mat` on a new object" touch different files, so git merges them without a conflict, and Unity opens the result with a Missing material. GANG looks for such pairs wherever they can arise:
+
+- **A commit that deletes an asset** that staged scenes, prefabs or materials still reference (by its GUID, which a moved asset keeps) gets a warning with the files that use it. It is not a block: pointing them elsewhere may come in the next commit.
+- **After a merge or rebase** (`gang sync`, `gang merge`, `gang pull`, and `gang bang` when it finishes one): assets one side deleted that files the *other* side changed still reference. Each one is asked on its own, on a terminal: *Bring Red.mat back?* Yes restores it from the merge base, with its `.meta`, the `.meta` of folders that went with it and the assets it uses that are gone the same way (a material's texture), in a commit of its own, `gang: bring back Red.mat, still in use`, whose message names who deleted it and who uses it. Without a terminal nothing is brought back; the warning gives the exact command.
+- **`gang doctor`** names, for each missing reference, the asset and the commit that deleted it, and the command that brings it back.
+
+A folder whose last asset is deleted goes with it on `gang save` (git keeps no empty folders: a teammate's Unity would find the folder's `.meta` alone and delete it, and the next save here would add a new one); a plain commit that leaves it gets a warning.
+
 ## 14. Special files
 
 ### 14.1 TagManager

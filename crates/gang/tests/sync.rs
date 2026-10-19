@@ -393,7 +393,7 @@ class Menu : MonoBehaviour
     team.write(
         "bob",
         "Assets/Scripts/Menu.cs.meta",
-        "fileFormatVersion: 2\nguid: 0000000000000000000000000000cccc\n",
+        "fileFormatVersion: 2\nguid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
     );
     let sync = team.sync("bob", "UI3D layer");
     assert_eq!(sync.code, Some(0), "{sync:?}");
@@ -1452,4 +1452,226 @@ fn one_side_for_every_conflict_is_refused() {
         Some(0)
     );
     assert!(team.read("bob", script).contains("speed = 3"));
+}
+
+const RED: &str = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  m_Name: Red
+";
+
+impl Team {
+    fn add_red(&self, user: &str) {
+        let root = self.sandbox.dir.path().join(user);
+        std::fs::create_dir_all(root.join("Assets/Materials")).unwrap();
+        self.write(
+            user,
+            "Assets/Materials.meta",
+            "fileFormatVersion: 2\nguid: 0000000000000000000000000000eeee\nfolderAsset: yes\n",
+        );
+        self.write(user, "Assets/Materials/Red.mat", RED);
+        self.write(
+            user,
+            "Assets/Materials/Red.mat.meta",
+            "fileFormatVersion: 2\nguid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
+        );
+    }
+
+    fn remove(&self, user: &str, path: &str) {
+        std::fs::remove_file(self.sandbox.dir.path().join(user).join(path)).unwrap();
+    }
+}
+
+const RED_RENDERER: &str = "--- !u!23 &203
+MeshRenderer:
+  m_GameObject: {fileID: 200}
+  m_Materials:
+  - {fileID: 2100000, guid: c0ffee00c0ffee00c0ffee00c0ffee00, type: 2}
+";
+
+/// Thought experiment R29: alice deletes a material while bob puts it on a
+/// new object. git merges the two without a conflict (different files);
+/// Unity would show bob's renderer with a Missing material.
+#[test]
+fn an_asset_deleted_on_one_side_and_used_on_the_other_is_reported() {
+    let team = Team::new();
+    team.add_red("alice");
+    assert_eq!(team.sync("alice", "red material").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    team.remove("alice", "Assets/Materials/Red.mat");
+    team.remove("alice", "Assets/Materials/Red.mat.meta");
+    assert_eq!(team.sync("alice", "no more red").code, Some(0));
+    team.write("bob", SCENE, &scene("0", "2.5", RED_RENDERER));
+    let sync = team.sync("bob", "red player");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr.contains(" deleted Assets/Materials/Red.mat (")
+            && sync.stderr.contains("but your work uses it:"),
+        "{sync:?}"
+    );
+    assert!(sync.stdout.contains(&format!("    {SCENE}")), "{sync:?}");
+    assert!(
+        sync.stderr.contains("To bring it back: gang git checkout "),
+        "{sync:?}"
+    );
+    // Without a terminal nothing is brought back on its own.
+    assert!(
+        !team
+            .sandbox
+            .dir
+            .path()
+            .join("bob/Assets/Materials/Red.mat")
+            .exists()
+    );
+    // gang doctor names where the missing asset went.
+    std::fs::create_dir_all(team.sandbox.dir.path().join("bob/Library/PackageCache")).unwrap();
+    let doctor = team.gang("bob", &["doctor"]);
+    assert!(
+        doctor
+            .stdout
+            .contains("Assets/Materials/Red.mat, deleted in "),
+        "{doctor:?}"
+    );
+    assert!(
+        doctor.stdout.contains("bring it back: gang git checkout "),
+        "{doctor:?}"
+    );
+
+    // The other way round: bob deleted it, alice's new work uses it.
+    team.add_red("bob");
+    assert_eq!(team.sync("bob", "red again").code, Some(0));
+    assert_eq!(team.sync("alice", "-").code, Some(0));
+    team.write("alice", SCENE, &scene("7", "2.5", RED_RENDERER));
+    assert_eq!(team.sync("alice", "red player moved").code, Some(0));
+    team.remove("bob", "Assets/Materials/Red.mat");
+    team.remove("bob", "Assets/Materials/Red.mat.meta");
+    team.write(
+        "bob",
+        "Assets/Scripts/Player.cs",
+        "class Player\n{\n    int speed = 9;\n}\n",
+    );
+    let sync = team.sync("bob", "red is gone");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr
+            .contains("You deleted Assets/Materials/Red.mat ("),
+        "{sync:?}"
+    );
+    assert!(
+        sync.stderr.contains("but the incoming work uses it:"),
+        "{sync:?}"
+    );
+}
+
+/// R29 at the source: a commit that deletes an asset a scene still uses
+/// says so (a warning: the scene may be fixed in the next commit). Moving
+/// the asset keeps its GUID and says nothing.
+#[test]
+fn deleting_an_asset_a_scene_still_uses_warns() {
+    let team = Team::new();
+    team.add_red("alice");
+    team.write("alice", SCENE, &scene("0", "2.5", RED_RENDERER));
+    assert_eq!(team.sync("alice", "red player").code, Some(0));
+
+    let root = team.sandbox.dir.path().join("alice");
+    std::fs::create_dir_all(root.join("Assets/Art")).unwrap();
+    team.write(
+        "alice",
+        "Assets/Art.meta",
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000ffff\nfolderAsset: yes\n",
+    );
+    std::fs::rename(
+        root.join("Assets/Materials/Red.mat"),
+        root.join("Assets/Art/Red.mat"),
+    )
+    .unwrap();
+    std::fs::rename(
+        root.join("Assets/Materials/Red.mat.meta"),
+        root.join("Assets/Art/Red.mat.meta"),
+    )
+    .unwrap();
+    let moved = team.gang("alice", &["save", "-m", "move red"]);
+    assert_eq!(moved.code, Some(0), "{moved:?}");
+    assert!(!moved.stderr.contains("Missing"), "{moved:?}");
+
+    team.remove("alice", "Assets/Art/Red.mat");
+    team.remove("alice", "Assets/Art/Red.mat.meta");
+    let deleted = team.gang("alice", &["save", "-m", "no more red"]);
+    assert_eq!(deleted.code, Some(0), "{deleted:?}");
+    assert!(
+        deleted.stderr.contains(&format!(
+            "⚠ Assets/Art/Red.mat: deleted, but {SCENE} still uses it"
+        )),
+        "{deleted:?}"
+    );
+}
+
+/// R30: `gang pull` (or `gang merge`) that merges cleanly gets the same
+/// reference checks as `gang sync`.
+#[test]
+fn a_clean_pull_checks_references_like_sync() {
+    let team = Team::new();
+    team.add_red("alice");
+    assert_eq!(team.sync("alice", "red material").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+    team.remove("alice", "Assets/Materials/Red.mat");
+    team.remove("alice", "Assets/Materials/Red.mat.meta");
+    assert_eq!(team.sync("alice", "no more red").code, Some(0));
+
+    team.write("bob", SCENE, &scene("0", "2.5", RED_RENDERER));
+    assert_eq!(
+        team.gang("bob", &["git", "commit", "-q", "-am", "red player"])
+            .code,
+        Some(0)
+    );
+    let pull = team.gang("bob", &["pull", "--no-rebase", "--no-edit"]);
+    assert_eq!(pull.code, Some(0), "{pull:?}");
+    assert!(
+        pull.stderr.contains(" deleted Assets/Materials/Red.mat ("),
+        "{pull:?}"
+    );
+}
+
+/// Thought experiment R31: the last asset of a folder deleted. git keeps no
+/// empty folders, so a teammate's Unity would find Materials.meta alone and
+/// delete it, and the next save here would bring a new one: noise back and
+/// forth. `gang save` takes the empty folder along; a plain commit warns.
+#[test]
+fn a_folder_emptied_by_a_save_goes_with_its_last_asset() {
+    let team = Team::new();
+    team.add_red("alice");
+    assert_eq!(team.sync("alice", "red material").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    team.remove("alice", "Assets/Materials/Red.mat");
+    team.remove("alice", "Assets/Materials/Red.mat.meta");
+    let save = team.gang("alice", &["save", "-m", "no more red"]);
+    assert_eq!(save.code, Some(0), "{save:?}");
+    assert!(
+        save.stdout
+            .contains("✓ The empty folder Assets/Materials goes too"),
+        "{save:?}"
+    );
+    let root = team.sandbox.dir.path();
+    assert!(!root.join("alice/Assets/Materials").exists());
+    assert!(!root.join("alice/Assets/Materials.meta").exists());
+    assert_eq!(
+        team.gang("alice", &["git", "ls-files", "Assets/Materials.meta"])
+            .stdout,
+        ""
+    );
+
+    // Plain git: the commit goes through with a warning.
+    team.remove("bob", "Assets/Materials/Red.mat");
+    team.remove("bob", "Assets/Materials/Red.mat.meta");
+    let commit = team.gang("bob", &["git", "commit", "-q", "-am", "no more red"]);
+    assert_eq!(commit.code, Some(0), "{commit:?}");
+    assert!(
+        commit
+            .stderr
+            .contains("nothing is left in Assets/Materials"),
+        "{commit:?}"
+    );
 }

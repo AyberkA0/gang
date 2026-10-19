@@ -773,3 +773,93 @@ fn status_on_a_terminal_adds_noise_lock_and_team_notes() {
         &["Team:", "⚠ alice is also changing Assets/Art/Notes.txt"],
     );
 }
+
+/// R29 on a terminal: a material deleted with its whole folder while a
+/// teammate used it comes back on one answer, with the texture it uses and
+/// its folder, in a commit of its own.
+#[test]
+fn a_deleted_asset_still_in_use_can_be_brought_back() {
+    let floor = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &100
+GameObject:
+  m_Name: Floor
+";
+    let red = "%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  m_Name: Red
+  m_SavedProperties:
+    m_TexEnvs:
+    - _MainTex:
+        m_Texture: {fileID: 2800000, guid: 0000000000000000000000000000dddd, type: 3}
+";
+    let team = Team::new(
+        &["alice", "bob"],
+        &[
+            (SCENE, floor),
+            (
+                "Assets/Materials.meta",
+                "fileFormatVersion: 2\nguid: 0000000000000000000000000000eeee\nfolderAsset: yes\n",
+            ),
+            ("Assets/Materials/Red.mat", red),
+            (
+                "Assets/Materials/Red.mat.meta",
+                "fileFormatVersion: 2\nguid: 0000000000000000000000000000cccc\n",
+            ),
+            ("Assets/Materials/Red.png", "not really a png\n"),
+            (
+                "Assets/Materials/Red.png.meta",
+                "fileFormatVersion: 2\nguid: 0000000000000000000000000000dddd\n",
+            ),
+        ],
+    );
+    let alice = team.sandbox.dir.path().join("alice");
+    std::fs::remove_dir_all(alice.join("Assets/Materials")).unwrap();
+    std::fs::remove_file(alice.join("Assets/Materials.meta")).unwrap();
+    team.sync("alice", "no more materials");
+
+    team.write(
+        "bob",
+        SCENE,
+        &format!(
+            "{floor}--- !u!23 &101
+MeshRenderer:
+  m_GameObject: {{fileID: 100}}
+  m_Materials:
+  - {{fileID: 2100000, guid: 0000000000000000000000000000cccc, type: 2}}
+"
+        ),
+    );
+    let mut sync = team.terminal("bob", &["sync", "-m", "red floor"]);
+    sync.expect("deleted Assets/Materials/Red.mat (");
+    sync.expect("Bring Red.mat back?");
+    sync.send("\r");
+    sync.expect("gang: bring back Red.mat, still in use");
+    let (code, screen) = sync.finish();
+    assert_eq!(code, 0, "{screen}");
+    let bob = team.sandbox.dir.path().join("bob");
+    for path in [
+        "Assets/Materials.meta",
+        "Assets/Materials/Red.mat",
+        "Assets/Materials/Red.mat.meta",
+        "Assets/Materials/Red.png",
+        "Assets/Materials/Red.png.meta",
+    ] {
+        assert!(bob.join(path).exists(), "{path}\n{screen}");
+    }
+    let log = team.git("bob", &["log", "-1", "--format=%B"]);
+    assert!(
+        log.stdout.contains("with Assets/Materials/Red.png\n"),
+        "{log:?}"
+    );
+    assert!(
+        log.stdout.contains("used by Assets/Scenes/Level1.unity"),
+        "{log:?}"
+    );
+    assert_eq!(team.git("bob", &["status", "--porcelain"]).stdout, "");
+    // Pushed with the rest: alice gets the material back.
+    team.sync("alice", "-");
+    assert!(alice.join("Assets/Materials/Red.mat").exists());
+}

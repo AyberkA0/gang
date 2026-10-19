@@ -1,6 +1,6 @@
 //! Project health checks for `gang doctor` (DESIGN.md §8.2, PLAN.md P11).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use unity_yaml::{GuidIndex, Value};
@@ -615,10 +615,36 @@ fn references(repo: &Repo, projects: &[UnityProject], tracked: &[String]) -> Res
         ));
     }
     if complete {
+        // Where a missing asset went: the commit that deleted it (R29).
+        let mut deletions: HashMap<String, Option<(String, String, String)>> = HashMap::new();
         for (path, guids) in missing {
             let mut guids = guids;
             guids.sort();
             guids.dedup();
+            let named: Vec<String> = guids
+                .iter()
+                .take(3)
+                .map(|guid| {
+                    match deletions
+                        .entry(guid.clone())
+                        .or_insert_with(|| crate::orphans::deleted_asset(repo, guid))
+                    {
+                        Some((asset, hash, author)) => {
+                            format!("{asset}, deleted in {hash} by {author}")
+                        }
+                        None => guid.clone(),
+                    }
+                })
+                .collect();
+            let fix = guids
+                .iter()
+                .find_map(|g| deletions.get(g).cloned().flatten())
+                .map(|(asset, hash, _)| {
+                    format!(
+                        "choose another asset in Unity, or bring it back: gang git checkout {hash}~1 -- \"{asset}\" \"{asset}.meta\""
+                    )
+                })
+                .unwrap_or_else(|| "someone may have forgotten to commit an asset".to_owned());
             checks.push(check(
                 Level::Problem,
                 "references",
@@ -626,9 +652,9 @@ fn references(repo: &Repo, projects: &[UnityProject], tracked: &[String]) -> Res
                     "{path} references {} missing asset{} ({})",
                     guids.len(),
                     if guids.len() == 1 { "" } else { "s" },
-                    guids.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+                    named.join("; ")
                 ),
-                Some("someone may have forgotten to commit an asset"),
+                Some(&fix),
                 false,
             ));
         }

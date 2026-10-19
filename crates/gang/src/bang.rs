@@ -828,11 +828,24 @@ fn finish_operation(repo: &Repo) -> Result<i32> {
         };
     if !ui::interactive() || ui::confirm(&format!("{what} now?"), true)? {
         let merging = what == "Commit the merge";
+        let rebasing = what == "Continue the rebase";
         let code = git::run_inherited(args)?;
         if code == 0 {
             ui::done("Done.");
-            if merging {
-                if let Err(err) = crate::prefabs_cmd::after_merge(repo, "HEAD^1") {
+            // The rebase may stop again for the next commit; the checks
+            // run once it is through, against where the branch was.
+            let through = rebasing
+                && !git_dir.join("rebase-merge").exists()
+                && !git_dir.join("rebase-apply").exists();
+            let before = if merging {
+                Some("HEAD^1")
+            } else if through {
+                Some("ORIG_HEAD")
+            } else {
+                None
+            };
+            if let Some(before) = before {
+                if let Err(err) = crate::prefabs_cmd::after_merge(repo, before) {
                     ui::warn(format!(
                         "could not check references after the merge: {err:#}"
                     ));

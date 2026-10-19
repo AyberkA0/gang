@@ -19,6 +19,7 @@ pub mod lock_check;
 pub mod lock_levels;
 pub mod locks;
 pub mod managed;
+pub mod orphans;
 pub use gang_merge::matrix;
 pub mod prefab_ids;
 pub mod presence;

@@ -1,6 +1,8 @@
 //! Rebuilt prefabs (DESIGN.md §13.9): references to a prefab's old object
 //! ids are pointed at the new ones, when the prefab is saved and when a
-//! teammate's rebuild comes in.
+//! teammate's rebuild comes in. After a merge, also the other references a
+//! merge can leave pointing at nothing: shared GUIDs (§14.5) and assets one
+//! side deleted while the other used them (R29).
 
 use anyhow::Result;
 use gang_core::config::Config;
@@ -103,7 +105,86 @@ pub fn before_save(repo: &Repo) -> Result<Option<i32>> {
 /// commit of its own.
 pub fn after_merge(repo: &Repo, before: &str) -> Result<()> {
     rebuilt_prefabs(repo, before)?;
-    shared_guids(repo, before)
+    shared_guids(repo, before)?;
+    deleted_in_use(repo, before)
+}
+
+/// One side deleted an asset the other side's work uses (R29): git merged
+/// the two without a conflict. Each one is asked on its own.
+fn deleted_in_use(repo: &Repo, before: &str) -> Result<()> {
+    let orphans = gang_core::orphans::after_merge(repo, before)?;
+    let mut brought: Vec<(&gang_core::orphans::Orphan, Vec<String>)> = Vec::new();
+    for orphan in &orphans {
+        let commit = orphan
+            .deleted_in
+            .as_ref()
+            .map(|(hash, _)| format!(" ({hash})"))
+            .unwrap_or_default();
+        let author = orphan.deleted_in.as_ref().map(|(_, a)| a.as_str());
+        if orphan.ours {
+            ui::warn(format!(
+                "You deleted {}{commit}, but the incoming work uses it:",
+                orphan.asset
+            ));
+        } else {
+            ui::warn(format!(
+                "{} deleted {}{commit}, but your work uses it:",
+                author.unwrap_or("The other side"),
+                orphan.asset
+            ));
+        }
+        for user in &orphan.users {
+            println!("    {user}");
+        }
+        if ui::interactive()
+            && ui::confirm(
+                &format!(
+                    "  Bring {} back? (No: Unity shows it as Missing there)",
+                    orphan.name()
+                ),
+                true,
+            )?
+        {
+            let paths = gang_core::orphans::bring_back(repo, orphan)?;
+            brought.push((orphan, paths));
+        } else {
+            ui::hint(format!(
+                "Unity shows it as Missing there. To bring it back: gang git checkout {} -- \"{}\" \"{}.meta\"",
+                &orphan.from[..orphan.from.len().min(10)],
+                orphan.asset,
+                orphan.asset
+            ));
+        }
+    }
+    if brought.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<&str> = brought.iter().map(|(o, _)| o.name()).collect();
+    let mut message = format!("gang: bring back {}, still in use\n\n", names.join(", "));
+    for (orphan, paths) in &brought {
+        message.push_str(&format!(
+            "- {} (deleted{}), used by {}\n",
+            orphan.asset,
+            orphan
+                .deleted_in
+                .as_ref()
+                .map(|(hash, author)| format!(" in {hash} by {author}"))
+                .unwrap_or_default(),
+            orphan.users.join(", ")
+        ));
+        for path in paths
+            .iter()
+            .filter(|p| **p != orphan.asset && **p != format!("{}.meta", orphan.asset))
+        {
+            message.push_str(&format!("  with {path}\n"));
+        }
+    }
+    repo.run(["commit", "-q", "--no-verify", "-m", &message])?;
+    ui::done(format!(
+        "Committed \"gang: bring back {}, still in use\"",
+        names.join(", ")
+    ));
+    Ok(())
 }
 
 /// Both added the same asset; the merge kept the shared GUID.

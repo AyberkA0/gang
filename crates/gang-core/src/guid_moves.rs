@@ -9,7 +9,7 @@ use anyhow::Result;
 use crate::repo::{Repo, split_nul};
 use crate::semantic;
 
-fn guid_of(text: &str) -> Option<String> {
+pub(crate) fn guid_of(text: &str) -> Option<String> {
     text.lines()
         .find_map(|l| l.strip_prefix("guid:"))
         .map(|g| g.trim().to_owned())

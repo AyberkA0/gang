@@ -4,7 +4,7 @@
 
 A terminal version-control tool for Unity teams, built on top of git and GitHub.
 
-- **Scenes and prefabs merge object by object.** Two people can change the same scene; GANG only asks when both changed the same property, with a quick question instead of conflict markers (`gang bang`), and every conflict is asked on its own, never in bulk. Collision matrices, list additions, define symbols and renamed fields merge without a question; a rebuilt prefab keeps its instances' overrides.
+- **Scenes and prefabs merge object by object.** Two people can change the same scene; GANG only asks when both changed the same property, with a quick question instead of conflict markers (`gang bang`), and every conflict is asked on its own, never in bulk. Collision matrices, list additions, define symbols and renamed fields merge without a question; a rebuilt prefab keeps its instances' overrides, and an asset one side deleted while the other started using it is caught after the merge and can be brought back.
 - **Layer numbers never silently change meaning.** A new layer is reserved for whoever names it first; a teammate's clashing layer moves before it is shared, together with the objects, masks, collision matrix and the C# code that use it, which GANG finds with the C# compiler that ships with Unity.
 - **See who is changing what** before it conflicts (`gang who`, `gang note "…"`, or `gang` for a live panel with the team, locks and notices).
 - **Lock** files, or objects inside a scene with the scripts and objects around them (`gang lock`).

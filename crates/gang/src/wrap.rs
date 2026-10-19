@@ -79,10 +79,30 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
                     layer_pass(invocation, &repo, name)?;
                 }
             }
+            let before = repo
+                .try_run(["rev-parse", "-q", "--verify", "HEAD"])?
+                .map(|h| h.trim().to_owned());
             let code = git_command(invocation, &invocation.args)?;
             if aborting {
                 gang_core::store::clear_all(&repo)?;
                 return Ok(code);
+            }
+            // A clean merge gets the same reference checks as `gang sync`
+            // (rebuilt prefabs, shared GUIDs, deleted assets in use).
+            if code == 0
+                && matches!(name, "merge" | "pull" | "rebase")
+                && setup::is_gang_repo(&repo)
+            {
+                let after = repo
+                    .try_run(["rev-parse", "-q", "--verify", "HEAD"])?
+                    .map(|h| h.trim().to_owned());
+                if let Some(before) = before.filter(|b| after.as_ref() != Some(b)) {
+                    if let Err(err) = crate::prefabs_cmd::after_merge(&repo, &before) {
+                        ui::warn(format!(
+                            "could not check references after the merge: {err:#}"
+                        ));
+                    }
+                }
             }
             if name == "pull" && code == 0 && setup::is_gang_repo(&repo) {
                 let _ = gang_core::presence::fetch(&repo);

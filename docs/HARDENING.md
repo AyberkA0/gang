@@ -169,6 +169,9 @@ Forty-eight team scenarios were walked through, then GANG's own new features wer
 | R11 | `gang pr merge` with Unity open | The working tree switched under the editor | Waits for Unity to close |
 | R27 | `gang checkout --theirs .` during a merge | Every conflict in the named files settled at once, for one side | Refused while questions are open; `gang bang` asks them one by one |
 | R28 | `gang merge -X theirs` (or `pull -Xours`, `rebase --strategy-option=theirs`) | git settled every text conflict for one side before GANG saw any | Refused; other `-X` options go through |
+| R29 | Alice deletes a material while Bob puts it on a new object | A clean merge; Unity shows a Missing material | Reported after the merge, with who deleted it; on a terminal *Bring Red.mat back?* restores it with its texture and folder in a commit of its own; a commit deleting a used asset warns; `gang doctor` names the deleting commit (DESIGN §13.11) |
+| R30 | `gang pull` / `gang merge` that merges cleanly | No reference checks (only `gang sync` and `gang bang` ran them) | The same checks as `gang sync`: rebuilt prefabs, shared GUIDs, deleted assets in use; also after a rebase finished in `gang bang` |
+| R31 | The last asset of a folder deleted | The folder's `.meta` stayed; teammates' Unity deleted it, the next save here added a new one | `gang save` takes the empty folder along; a plain commit warns |
 | TE42 | A layer removed on one side while the other puts objects on it | Silent: the objects end up on a layer with no name | Reported during the sync; `gang doctor` lists objects on unnamed layers and undefined tags |
 | A1 | A prefab rebuilt with new ids | Instances lost their overrides silently | References repointed (DESIGN §13.9) |
 | §1.3 | A Unity file the parser rejects | Conflict markers in the file | Clean line merge or a whole-file question |

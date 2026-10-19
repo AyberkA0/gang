@@ -361,6 +361,8 @@ fn merge(
     }
     let status = command.status()?;
     let code = git::exit_code(status);
+    // After questions, `gang bang` ran the checks when it finished.
+    let clean = code == 0;
     if code != 0 {
         let code = crate::wrap::offer_bang(repo, code)?;
         if code != 0 || !crate::bang::unmerged(repo)?.is_empty() {
@@ -370,8 +372,12 @@ fn merge(
     let _ = invocation;
     summarize(repo, &before, &names);
     warn_about_my_locks(repo, &before);
-    if let Err(err) = crate::prefabs_cmd::after_merge(repo, &before) {
-        ui::warn(format!("could not check rebuilt prefabs: {err:#}"));
+    if clean {
+        if let Err(err) = crate::prefabs_cmd::after_merge(repo, &before) {
+            ui::warn(format!(
+                "could not check references after the merge: {err:#}"
+            ));
+        }
     }
     Ok(0)
 }

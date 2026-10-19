@@ -148,6 +148,45 @@ fn unity_skips(relative: &str) -> bool {
 
 /// The Unity project and the path inside it, for paths under a project's
 /// `Assets/` folder (`Assets/...` itself has no `.meta`).
+/// Folders the staged deletions leave with nothing tracked in them while
+/// their `.meta` stays (HARDENING.md R31): on a teammate's machine the
+/// folder does not exist, and Unity deletes the lone `.meta`.
+pub fn emptied_folders(repo: &Repo) -> Result<Vec<String>> {
+    let changes = staged_changes(repo)?;
+    if !changes.iter().any(Change::deletes) {
+        return Ok(Vec::new());
+    }
+    let index: BTreeSet<String> = repo.tracked_files()?.into_iter().collect();
+    Ok(emptied(
+        &changes,
+        &index,
+        &unity::find_projects(repo.root()),
+    ))
+}
+
+fn emptied(changes: &[Change], index: &BTreeSet<String>, projects: &[UnityProject]) -> Vec<String> {
+    let has_children = |dir: &str| {
+        let prefix = format!("{dir}/");
+        index
+            .range(prefix.clone()..)
+            .next()
+            .is_some_and(|p| p.starts_with(&prefix))
+    };
+    let mut folders = BTreeSet::new();
+    for change in changes.iter().filter(|c| c.deletes()) {
+        let Some((parent, _)) = change.path.rsplit_once('/') else {
+            continue;
+        };
+        if in_assets(projects, parent).is_some()
+            && index.contains(&format!("{parent}.meta"))
+            && !has_children(parent)
+        {
+            folders.insert(parent.to_owned());
+        }
+    }
+    folders.into_iter().collect()
+}
+
 fn in_assets<'a>(projects: &'a [UnityProject], path: &str) -> Option<(&'a UnityProject, String)> {
     projects.iter().find_map(|project| {
         let assets = project.join("Assets/");
@@ -200,6 +239,15 @@ pub fn check_staged(repo: &Repo, allow: &Allow) -> Result<Vec<Finding>> {
 
     check_names(&changes, &index, &mut findings);
     check_metas(repo, &changes, &index, &projects, &mut findings);
+    for folder in emptied(&changes, &index, &projects) {
+        findings.push(Finding::warn(
+            &format!("{folder}.meta"),
+            format!(
+                "stays, but nothing is left in {folder}; git keeps no empty folders, so teammates' Unity deletes this .meta"
+            ),
+            Some(format!("gang rm {}", quote(&format!("{folder}.meta")))),
+        ));
+    }
     check_guids(repo, &changes, &mut findings)?;
     check_sizes(repo, &changes, &mut findings)?;
     check_unity_version(&changes, &projects, allow, &mut findings);

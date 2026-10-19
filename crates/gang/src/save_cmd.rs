@@ -109,11 +109,15 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
     };
 
     let op = safety::begin(&repo, "save", false)?;
+    let dropped = drop_empty_folders(&repo)?;
     let mut commit = invocation.git_globals.clone();
     commit.extend(["commit".into(), "-q".into(), "-m".into(), message.into()]);
     let code = git::run_inherited(&commit)?;
     if code != 0 {
         restore_index(&repo);
+        for folder in &dropped {
+            let _ = repo.run(["checkout", "--", &format!("{folder}.meta")]);
+        }
         if index_before.is_some() {
             ui::hint("Nothing was staged or committed; your changes are where they were.");
         }
@@ -135,6 +139,44 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
         return Ok(git::run_inherited(&push)?);
     }
     Ok(0)
+}
+
+/// The last asset of a folder deleted, the folder and its `.meta` left
+/// (R31): git keeps no empty folders, so on teammates' machines Unity would
+/// delete the lone `.meta`, and here it would give the folder a new one when
+/// it comes back. The empty folder goes with its last asset, as when a
+/// folder is deleted in Unity.
+fn drop_empty_folders(repo: &Repo) -> Result<Vec<String>> {
+    let mut all = Vec::new();
+    for _ in 0..32 {
+        let folders = guards::emptied_folders(repo)?;
+        let mut dropped = false;
+        for folder in folders {
+            let dir = repo.root().join(&folder);
+            if !is_empty_dir(&dir) {
+                continue;
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            repo.run(["rm", "-q", "--", &format!("{folder}.meta")])?;
+            println!("✓ The empty folder {folder} goes too (git keeps no empty folders)");
+            all.push(folder);
+            dropped = true;
+        }
+        if !dropped {
+            break;
+        }
+    }
+    Ok(all)
+}
+
+/// A missing folder, or one with only empty folders in it.
+fn is_empty_dir(dir: &std::path::Path) -> bool {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .all(|e| e.path().is_dir() && is_empty_dir(&e.path())),
+        Err(_) => true,
+    }
 }
 
 /// `gang undo`: undoes the last GANG operation.
@@ -197,6 +239,34 @@ fn pre_commit() -> Result<i32> {
 
     // Locks, reserved layer numbers and the bake policy.
     if gang_core::setup::is_gang_repo(&repo) {
+        // Deleting an asset that scenes still use (R29): a warning, since
+        // pointing them elsewhere may well come in the next commit.
+        for orphan in gang_core::orphans::staged(&repo).unwrap_or_default() {
+            let count = orphan.users.len();
+            eprintln!(
+                "⚠ {}: deleted, but {} still use{} it; Unity will show it as Missing there",
+                orphan.asset,
+                if count == 1 {
+                    orphan.users[0].clone()
+                } else {
+                    format!(
+                        "{count} files ({})",
+                        orphan
+                            .users
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+                if count == 1 { "s" } else { "" }
+            );
+            eprintln!(
+                "  Fix: point them at another asset in Unity, or keep it: gang restore --staged --worktree -- \"{}\" \"{}.meta\"",
+                orphan.asset, orphan.asset
+            );
+        }
         for problem in crate::layers_cmd::pre_commit_problems(&repo) {
             blocked = true;
             eprintln!("✗ {problem}");
