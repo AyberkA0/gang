@@ -188,17 +188,28 @@ pub fn pre_merge(repo: &Repo, upstream: &str) -> Result<()> {
         return Ok(());
     };
     for m in &report.moves {
-        println!("Layer conflict: {}.", m.taken_by);
-        println!(
-            "  → Moving {:?} to layer {} and updating what your commits used it for:",
-            m.name, m.to
-        );
+        if m.follow {
+            println!("Layer moved: {}.", m.taken_by);
+            println!(
+                "  → Moving your new uses of layer {} to layer {}:",
+                m.from, m.to
+            );
+        } else {
+            println!("Layer conflict: {}.", m.taken_by);
+            println!(
+                "  → Moving {:?} to layer {} and updating what your commits used it for:",
+                m.name, m.to
+            );
+        }
     }
     for line in &report.updated {
         println!("    ✓ {line}");
     }
     for line in &report.review {
         println!("    ⚠ {line} — please review");
+    }
+    if report.review.is_empty() {
+        println!("    Nothing needs review.");
     }
     let subject = repo.run(["log", "-1", "--format=%s"])?;
     ui::done(format!("Committed \"{}\"", subject.trim()));

@@ -21,6 +21,9 @@ pub struct Move {
     pub to: u32,
     /// What took the layer: `"Pickup" on origin/main (ayberk)`.
     pub taken_by: String,
+    /// The other side already moved this layer; our commits' new uses of
+    /// the old number follow it. Our TagManager is left to the merge.
+    pub follow: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -80,7 +83,28 @@ pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject
         let mut taken: BTreeSet<usize> = BTreeSet::new();
         for i in FIRST_USER_LAYER..LAYER_COUNT {
             let (bi, oi, ti) = (get(&b, i), get(&o, i), get(&t, i));
-            if oi.is_empty() || oi == bi {
+            // Their side moved a layer we both had (a remap like this one,
+            // done by a teammate): our new uses of the old number follow it.
+            if !bi.is_empty() && oi == bi && ti != bi {
+                if let Some(j) = (FIRST_USER_LAYER..LAYER_COUNT)
+                    .find(|&j| j != i && get(&t, j) == bi && get(&b, j) != bi)
+                {
+                    moves.push(Move {
+                        name: bi.clone(),
+                        from: i as u32,
+                        to: j as u32,
+                        taken_by: format!(
+                            "{bi:?} moved from layer {i} to {j} on {upstream} ({who})"
+                        ),
+                        follow: true,
+                    });
+                }
+                continue;
+            }
+            // Only a layer that is new on our side can clash. A layer the base
+            // already had and both renamed is one layer with two names: the
+            // merge asks which name, and nothing moves.
+            if oi.is_empty() || oi == bi || !bi.is_empty() {
                 continue;
             }
             // The same name already at another index on their side: use theirs.
@@ -92,6 +116,7 @@ pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject
                     from: i as u32,
                     to: j as u32,
                     taken_by: format!("{oi:?} is already layer {j} on {upstream} ({who})"),
+                    follow: false,
                 });
                 continue;
             }
@@ -109,6 +134,7 @@ pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject
                         from: i as u32,
                         to: k as u32,
                         taken_by: format!("Layer {i} is {ti:?} on {upstream} ({who})"),
+                        follow: false,
                     });
                 }
             }
@@ -129,9 +155,12 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
         ..Report::default()
     };
 
-    // TagManager.
+    // TagManager (layers the other side moved already are its business).
     let tags_path = tag_manager(project);
-    if let Some(text) = semantic::worktree(repo, &tags_path) {
+    let own: Vec<&Move> = moves.iter().filter(|m| !m.follow).collect();
+    if own.is_empty() {
+        // Nothing to rename here.
+    } else if let Some(text) = semantic::worktree(repo, &tags_path) {
         if let Ok(mut file) = unity_yaml::parse(&text) {
             let base_names = semantic::blob(repo, &format!("{base}:{tags_path}"))?
                 .and_then(|t| layer_names(&t))
@@ -141,14 +170,14 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
                 .and_then(|b| b.get_mut("layers"))
                 .and_then(Value::as_seq_mut)
             {
-                for m in moves {
+                for m in &own {
                     let previous = base_names.get(m.from as usize).cloned().unwrap_or_default();
                     set_layer(items, m.from as usize, &previous);
                     set_layer(items, m.to as usize, &m.name);
                 }
             }
             std::fs::write(repo.root().join(&tags_path), file.to_text())?;
-            let what = moves
+            let what = own
                 .iter()
                 .map(|m| format!("layer {} → {}", m.from, m.to))
                 .collect::<Vec<_>>()
@@ -187,6 +216,15 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
             let mut counts = Counts::default();
             for m in moves {
                 remap_file(&mut file, base_file.as_ref(), m.from, m.to, &mut counts);
+            }
+            if counts.unclear_masks > 0 {
+                report.review.push(format!(
+                    "{path}: {} layer mask{} already covered layer {} as well; left as is, check {}",
+                    counts.unclear_masks,
+                    if counts.unclear_masks == 1 { "" } else { "s" },
+                    m_to(moves),
+                    if counts.unclear_masks == 1 { "it" } else { "them" }
+                ));
             }
             if counts.any() {
                 std::fs::write(repo.root().join(&path), file.to_text())?;
@@ -260,6 +298,8 @@ struct Counts {
     masks: usize,
     overrides: usize,
     heuristic: Vec<String>,
+    /// Masks that already covered the target layer: left alone.
+    unclear_masks: usize,
 }
 
 impl Counts {
@@ -348,6 +388,8 @@ fn remap_map(
                     if let Some(bits) = move_bit(&value, from, to) {
                         map.set(&key, Value::Scalar(Scalar::raw(bits)));
                         counts.masks += 1;
+                    } else if covers_both(&value, from, to) {
+                        counts.unclear_masks += 1;
                     }
                 } else if type_name == "MonoBehaviour"
                     && key.to_ascii_lowercase().contains("layer")
@@ -405,15 +447,30 @@ fn remap_map(
     }
 }
 
-/// Moves bit `from` to bit `to` in a LayerMask value. Leaves "Everything"
-/// (all bits) and masks without the bit alone.
+/// Moves bit `from` to bit `to` in a LayerMask value. Leaves alone masks
+/// without the bit, and masks that already have bit `to` ("Everything", or
+/// "everything except …"): clearing `from` there would drop the other side's
+/// layer, keeping it might include it by accident, so a person decides.
 fn move_bit(value: &str, from: u32, to: u32) -> Option<String> {
     let bits: u64 = value.trim().parse().ok()?;
     let bits = bits as u32;
-    if bits == u32::MAX || bits & (1 << from) == 0 {
+    if bits & (1 << from) == 0 || bits & (1 << to) != 0 {
         return None;
     }
     Some(((bits & !(1 << from)) | (1 << to)).to_string())
+}
+
+fn covers_both(value: &str, from: u32, to: u32) -> bool {
+    let bits = value.trim().parse::<u64>().map(|b| b as u32).unwrap_or(0);
+    bits != u32::MAX && bits & (1 << from) != 0 && bits & (1 << to) != 0
+}
+
+fn m_to(moves: &[Move]) -> String {
+    moves
+        .iter()
+        .map(|m| m.to.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Plans, applies and commits the remap before merging `upstream`.
@@ -446,6 +503,14 @@ pub fn run(repo: &Repo, upstream: &str) -> Result<Option<Report>> {
         total.updated.extend(report.updated);
         total.review.extend(report.review);
     }
+    if repo
+        .run(["status", "--porcelain", "--untracked-files=no"])?
+        .trim()
+        .is_empty()
+    {
+        // A teammate's move that none of our commits used: nothing to do.
+        return Ok(None);
+    }
     let mut message = String::new();
     for m in &total.moves {
         message.push_str(&format!(
@@ -455,10 +520,17 @@ pub fn run(repo: &Repo, upstream: &str) -> Result<Option<Report>> {
     }
     message.push('\n');
     for m in &total.moves {
-        message.push_str(&format!(
-            "{}, so {:?} moved to layer {}.\n",
-            m.taken_by, m.name, m.to
-        ));
+        if m.follow {
+            message.push_str(&format!(
+                "{}, so our new uses of layer {} moved with it.\n",
+                m.taken_by, m.from
+            ));
+        } else {
+            message.push_str(&format!(
+                "{}, so {:?} moved to layer {}.\n",
+                m.taken_by, m.name, m.to
+            ));
+        }
     }
     if !total.updated.is_empty() {
         message.push_str("\nUpdated:\n");
@@ -491,6 +563,11 @@ mod tests {
         assert_eq!(move_bit("257", 8, 9).as_deref(), Some("513"));
         assert_eq!(move_bit("4294967295", 8, 9), None);
         assert_eq!(move_bit("1", 8, 9), None);
+        // Everything except layer 5: bit 9 is already set.
+        let all_but_5 = (u32::MAX & !(1 << 5)).to_string();
+        assert_eq!(move_bit(&all_but_5, 8, 9), None);
+        assert!(covers_both(&all_but_5, 8, 9));
+        assert!(!covers_both("4294967295", 8, 9));
     }
 
     #[test]

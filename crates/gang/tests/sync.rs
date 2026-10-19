@@ -398,9 +398,12 @@ fn renaming_the_same_layer_twice_does_not_split_it() {
         !sync.stdout.contains("Moving \"Foes\""),
         "the layer was split in two: {sync:?}"
     );
-    // Imp and Zombie must still share one layer.
+    // Imp and Zombie must still share one layer; only the name is asked.
     let text = team.read("bob", SCENE);
     assert!(!text.contains("m_Layer: 9"), "{text}");
+    assert_eq!(sync.code, Some(1), "{sync:?}");
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert!(list.stdout.contains("Layers[8]"), "{list:?}");
 }
 
 /// A layer that was already shared (here on a branch) moves: teammates who
