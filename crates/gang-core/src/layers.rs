@@ -171,6 +171,27 @@ pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject
 /// the Unity files our commits changed, and recognizable layer numbers in
 /// the lines our commits added to scripts.
 pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) -> Result<Report> {
+    apply_in(repo, base, Some("HEAD"), project, moves)
+}
+
+/// Like [`apply`], for work that is not committed yet: everything that
+/// differs between `base` and the working tree, new files included.
+pub fn apply_to_worktree(
+    repo: &Repo,
+    base: &str,
+    project: &UnityProject,
+    moves: &[Move],
+) -> Result<Report> {
+    apply_in(repo, base, None, project, moves)
+}
+
+fn apply_in(
+    repo: &Repo,
+    base: &str,
+    head: Option<&str>,
+    project: &UnityProject,
+    moves: &[Move],
+) -> Result<Report> {
     let mut report = Report {
         moves: moves.to_vec(),
         ..Report::default()
@@ -219,8 +240,26 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
     } else {
         project.dir.clone()
     };
-    let changed =
-        split_nul(&repo.run(["diff", "--name-only", "-z", base, "HEAD", "--", &scope])?);
+    let mut changed = match head {
+        Some(head) => {
+            split_nul(&repo.run(["diff", "--name-only", "-z", base, head, "--", &scope])?)
+        }
+        None => split_nul(&repo.run(["diff", "--name-only", "-z", base, "--", &scope])?),
+    };
+    let untracked: BTreeSet<String> = match head {
+        Some(_) => BTreeSet::new(),
+        None => split_nul(&repo.run([
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            &scope,
+        ])?)
+        .into_iter()
+        .collect(),
+    };
+    changed.extend(untracked.iter().cloned());
     for path in changed {
         if path == tags_path {
             continue;
@@ -269,7 +308,11 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
             let Some(source) = semantic::worktree(repo, &path) else {
                 continue;
             };
-            let added = added_lines(repo, base, &path)?;
+            let added = if untracked.contains(&path) {
+                (1..=source.lines().count()).collect()
+            } else {
+                added_lines(repo, base, head, &path)?
+            };
             let mut text = source.clone();
             for m in moves {
                 let result = gang_csharp::rewrite_layer_number(&text, &added, m.from, m.to);
@@ -302,9 +345,13 @@ fn set_layer(items: &mut Vec<Item>, index: usize, name: &str) {
     });
 }
 
-/// Lines (1-based, in the current version) our commits added to a file.
-fn added_lines(repo: &Repo, base: &str, path: &str) -> Result<BTreeSet<usize>> {
-    let diff = repo.run(["diff", "-U0", base, "HEAD", "--", path])?;
+/// Lines (1-based, in the current version) our commits (or, without
+/// `head`, our work in the working tree) added to a file.
+fn added_lines(repo: &Repo, base: &str, head: Option<&str>, path: &str) -> Result<BTreeSet<usize>> {
+    let diff = match head {
+        Some(head) => repo.run(["diff", "-U0", base, head, "--", path])?,
+        None => repo.run(["diff", "-U0", base, "--", path])?,
+    };
     let mut lines = BTreeSet::new();
     for line in diff.lines().filter(|l| l.starts_with("@@")) {
         // @@ -a,b +c,d @@

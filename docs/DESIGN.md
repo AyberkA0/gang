@@ -807,6 +807,23 @@ Known gaps (see [HARDENING.md](HARDENING.md) §1.1): collision matrices are not 
 | Code and other text | git's normal merge; conflicts answered hunk by hunk in bang |
 | Binary | No merge; bang offers mine / theirs / compare |
 
+### 14.6 Reserved numbers
+
+Unity refers to physics layers, rendering layers and NavMesh areas by their **position** in a project-wide table, and objects, masks and scripts store that position. When two people fill the same empty position with different names, the merge can only pick one name; everything the other person built on that number silently changes meaning. The layer remap (§14.2) repairs this after the fact. Reservations stop it from happening.
+
+- **Shared ref** `refs/gang/claims` holds `claims.json`: `{table, project, index, name, owner, since}` per reserved position, changed with compare-and-swap like the lock table (§6.1). The tables are `layers` and `m_RenderingLayers` in `TagManager.asset`, and `areas` in `NavMeshAreas.asset`.
+- **A new entry** is a name in the working tree at a position the team's default branch (`origin/HEAD`, else `origin/main`) leaves empty. Before deciding, GANG fetches that branch: a name the team already pushed is not reserved, it goes through the merge-time remap.
+- **When:** the background publisher (after every GANG command and on the commit, checkout and merge hooks) reserves new entries and releases the ones that are gone, so nobody types anything. `gang save` does it in the foreground before staging. `gang layers` shows the state.
+- **First claim wins.** The same name at the same position is one entry, shared. Another name at a reserved position is a clash:
+  - `gang status` and `gang layers` say so right away (`Layer 8 is reserved for "Projectile" by ayberk, 3 min ago; you named it "Interactable": yours moves to layer 9`).
+  - `gang save` moves a clashing **physics layer** before staging: the TagManager, the objects, masks and prefab overrides in every Unity file that differs from the default branch, and the layer numbers in scripts (the C# rules of §14.2), using the same engine as the remap, on the working tree. The review list is printed. Unity must be closed (it would write its own copy of the settings back); otherwise the save stops and says so.
+  - Rendering layers and NavMesh areas are not moved automatically: the save stops with the first free position and where to change it in Unity.
+  - A plain `git commit` is stopped by the pre-commit hook (from the reservations as last fetched) with `Fix: gang save`.
+- **Release:** a reservation disappears when the default branch has a name at that position, when its owner's clone no longer has the entry, when its owner has not been seen for 14 days, or with `gang layers release <name>`.
+- Offline, nothing is reserved and nothing blocks; the remap (§14.2) still repairs a clash at the next merge. `GANG_NO_CLAIMS=1` turns reservations off.
+
+The effect, in the field test's terms: whoever **names** a layer first keeps its number, instead of whoever **pushes** first, and the move happens before any teammate has the number in their work. On a feature branch (L2), a layer reserved on the branch keeps its number, and the layer that reaches `main` later takes the next free one when it is saved.
+
 ## 15. gang bang
 
 ### 15.1 When it runs

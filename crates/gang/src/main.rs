@@ -3,6 +3,7 @@ mod bang;
 mod doctor_cmd;
 mod help;
 mod ignore_cmd;
+mod layers_cmd;
 mod locks_cmd;
 mod panel;
 mod plumbing;
@@ -75,6 +76,7 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("lock") => locks_cmd::lock(invocation),
         Some("unlock") => locks_cmd::unlock(invocation),
         Some("locks") => locks_cmd::list(invocation),
+        Some("layers") => layers_cmd::run(invocation),
         Some("doctor") => doctor_cmd::run(invocation),
         Some("auth") => auth_cmd::run(invocation),
         Some("credential") => auth_cmd::credential(invocation),

@@ -49,6 +49,12 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
         ui::hint("Answer them first: gang bang");
         return Ok(1);
     }
+    // New layers: reserve them, and move the ones a teammate took first
+    // before anything is staged (DESIGN.md §14.6).
+    if let Some(code) = crate::layers_cmd::before_save(&repo)? {
+        return Ok(code);
+    }
+
     // A refused save must leave the index exactly as it was.
     let index_before = repo.try_run(["write-tree"])?.map(|t| t.trim().to_owned());
     let restore_index = |repo: &Repo| {
@@ -185,8 +191,15 @@ fn pre_commit() -> Result<i32> {
         }
     }
 
-    // Locks and the bake policy.
+    // Locks, reserved layer numbers and the bake policy.
     if gang_core::setup::is_gang_repo(&repo) {
+        for problem in crate::layers_cmd::pre_commit_problems(&repo) {
+            blocked = true;
+            eprintln!("✗ {problem}");
+            eprintln!(
+                "  Fix: gang save (it moves your layer, with your objects and scripts; close Unity first)"
+            );
+        }
         let changes = guards::staged_changes(&repo)?;
         let versions: Vec<(String, Option<String>, Option<String>)> = changes
             .iter()

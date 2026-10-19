@@ -124,7 +124,10 @@ pub fn publish(invocation: &Invocation) -> Result<i32> {
     }
     let config = Config::load(repo.root())?;
     let force = invocation.args.iter().any(|a| a == "--force");
-    match presence::publish(&repo, &config, force)? {
+    let published = presence::publish(&repo, &config, force);
+    // Reservations go out even when presence had nothing new.
+    crate::layers_cmd::background(&repo, &config);
+    match published? {
         presence::Published::Pushed => println!("published"),
         presence::Published::Unchanged => println!("unchanged"),
         presence::Published::NoRemote => println!("no origin remote"),
@@ -363,6 +366,14 @@ pub fn status(invocation: &Invocation, repo: Option<&Repo>) -> Result<i32> {
             println!();
             println!("Unity:");
             for note in noise {
+                println!("  {note}");
+            }
+        }
+        let reserved = crate::layers_cmd::status_notes(repo);
+        if !reserved.is_empty() {
+            println!();
+            println!("Layers:");
+            for note in reserved {
                 println!("  {note}");
             }
         }

@@ -3,6 +3,7 @@
 
 pub mod attributes;
 pub mod auth;
+pub mod claims;
 pub mod clock;
 pub mod commands;
 pub mod config;

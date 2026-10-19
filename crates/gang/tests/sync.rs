@@ -531,15 +531,50 @@ fn renaming_the_same_layer_twice_does_not_split_it() {
 /// started using it before the move must have their new work moved too.
 #[test]
 fn a_moved_layer_follows_teammates_work_in_progress() {
+    // Without reservations (a teammate on an older GANG, or plain git
+    // offline), the layer remap has to repair the clash after the fact.
     let team = Team::with(&["alice", "bob", "carol"]);
-    base_tags(&team, &["alice", "bob", "carol"], None);
+    team.sandbox
+        .env
+        .lock()
+        .unwrap()
+        .push(("GANG_NO_CLAIMS".into(), "1".into()));
+    let carol = branch_layer_meets_main(&team);
+    let text = team.read("carol", SCENE);
+    let panel = text.split("m_Name: MenuPanel").next().unwrap();
+    assert!(
+        panel.trim_end().ends_with("m_Layer: 9"),
+        "MenuPanel silently moved to Pickup: {text} {carol:?}"
+    );
+}
+
+/// With reservations the clash never happens: UI3D was reserved on the
+/// branch first, so Pickup takes the next number when Alice saves it, and
+/// nothing on the branch has to move.
+#[test]
+fn a_layer_reserved_on_a_branch_keeps_its_number() {
+    let team = Team::with(&["alice", "bob", "carol"]);
+    branch_layer_meets_main(&team);
+    let names = gang_core_layer_names(&team.read("carol", "ProjectSettings/TagManager.asset"));
+    assert_eq!(names[8], "UI3D");
+    assert_eq!(names[9], "Pickup");
+    let text = team.read("carol", SCENE);
+    let panel = text.split("m_Name: MenuPanel").next().unwrap();
+    assert!(panel.trim_end().ends_with("m_Layer: 8"), "{text}");
+    let log = team.sandbox.run_in("alice", "git", &["log", "--format=%s"]);
+    assert!(!log.stdout.contains("gang: move layer"), "{log:?}");
+}
+
+/// Bob shares UI3D = 8 on a branch, Carol builds on it, Pickup = 8 lands
+/// on main, Bob merges main into the branch, Carol syncs.
+fn branch_layer_meets_main(team: &Team) -> common::Outcome {
+    base_tags(team, &["alice", "bob", "carol"], None);
     assert_eq!(team.sync("alice", "tags").code, Some(0));
     for user in ["bob", "carol"] {
         assert_eq!(team.sync(user, "-").code, Some(0));
     }
-    // Bob shares UI3D = 8 on a branch; Carol picks the branch up.
     team.gang("bob", &["switch", "-c", "menu"]);
-    base_tags(&team, &["bob"], Some("UI3D"));
+    base_tags(team, &["bob"], Some("UI3D"));
     assert_eq!(team.gang("bob", &["save", "-m", "UI3D"]).code, Some(0));
     assert_eq!(
         team.gang("bob", &["push", "-u", "origin", "menu"]).code,
@@ -554,23 +589,16 @@ fn a_moved_layer_follows_teammates_work_in_progress() {
         Some(0)
     );
 
-    // Meanwhile Pickup = 8 lands on main; Bob merges main into the branch.
-    base_tags(&team, &["alice"], Some("Pickup"));
+    base_tags(team, &["alice"], Some("Pickup"));
     assert_eq!(team.sync("alice", "Pickup").code, Some(0));
     team.gang("bob", &["fetch"]);
     let merge = team.gang("bob", &["merge", "origin/main", "-m", "main"]);
     assert_eq!(merge.code, Some(0), "{merge:?}");
     assert_eq!(team.gang("bob", &["push"]).code, Some(0));
 
-    // Carol syncs: her MenuPanel must end up on UI3D (9), not on Pickup (8).
     let sync = team.sync("carol", "-");
     assert_eq!(sync.code, Some(0), "{sync:?}");
-    let text = team.read("carol", SCENE);
-    let panel = text.split("m_Name: MenuPanel").next().unwrap();
-    assert!(
-        panel.trim_end().ends_with("m_Layer: 9"),
-        "MenuPanel silently moved to Pickup: {text}"
-    );
+    sync
 }
 
 /// Field test A2: `gang save` during a merge with open questions must not

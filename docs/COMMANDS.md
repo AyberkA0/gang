@@ -190,6 +190,22 @@ Options:
   -h, --help  Print help
 ```
 
+## gang layers
+
+```text
+Layers, rendering layers and NavMesh areas: who reserved which number
+
+Usage: gang layers [COMMAND]
+
+Commands:
+  fix      Move your new layers away from numbers a teammate reserved first, with your objects and scripts (Unity must be closed)
+  release  Give up your reservation of a name
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+```
+
 ## gang ignore
 
 ```text

@@ -15,6 +15,8 @@ pub struct Sandbox {
     pub dir: TempDir,
     pub repo: PathBuf,
     pub home: PathBuf,
+    /// Extra environment for every command run in the sandbox.
+    pub env: std::sync::Mutex<Vec<(String, String)>>,
 }
 
 impl Sandbox {
@@ -42,7 +44,12 @@ impl Sandbox {
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&repo).unwrap();
         fs::write(home.join(".gitconfig"), "").unwrap();
-        Sandbox { dir, repo, home }
+        Sandbox {
+            dir,
+            repo,
+            home,
+            env: Default::default(),
+        }
     }
 
     pub fn write(&self, name: &str, content: &str) {
@@ -116,6 +123,9 @@ impl Sandbox {
                 "GANG_CREDENTIALS_FILE",
                 self.home.join("gang-credentials.json"),
             );
+        for (key, value) in self.env.lock().unwrap().iter() {
+            command.env(key, value);
+        }
         command
     }
 

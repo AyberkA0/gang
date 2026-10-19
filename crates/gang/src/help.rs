@@ -20,6 +20,7 @@ GANG commands:
   lock <target>    Lock files or objects (file::object, --level 0|1|2, --auto, --bake)
   unlock <target>  Release locks
   locks            Show the team's locks
+  layers           Who reserved which layer number (fix, release <name>)
   tree <file>      Show the objects of a scene or prefab
   ignore           Manage ignore rules shared by the team
   doctor [--fix]   Check the project's health
@@ -72,6 +73,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         Some("lock") => crate::locks_cmd::LockArgs::command().print_help()?,
         Some("unlock") => crate::locks_cmd::UnlockArgs::command().print_help()?,
         Some("locks") => crate::locks_cmd::LocksArgs::command().print_help()?,
+        Some("layers") => crate::layers_cmd::LayersArgs::command().print_help()?,
         Some("doctor") => crate::doctor_cmd::Args::command().print_help()?,
         Some("auth") => crate::auth_cmd::Args::command().print_help()?,
         Some(_) => {
