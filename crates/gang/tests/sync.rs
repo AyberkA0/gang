@@ -1443,6 +1443,13 @@ fn one_side_for_every_conflict_is_refused() {
     }
     assert!(team.read("bob", script).contains("speed = 3"));
     assert!(!team.sandbox.dir.path().join("bob/.git/MERGE_HEAD").exists());
+    let none = team.gang("bob", &["merge", "-s", "ours", "origin/main"]);
+    assert_eq!(none.code, Some(1), "{none:?}");
+    assert!(
+        none.stderr
+            .contains("keep none of the other side's changes"),
+        "{none:?}"
+    );
     // Other strategy options still go through.
     let merge = team.gang(
         "bob",

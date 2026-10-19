@@ -75,6 +75,19 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
                     ));
                     return Ok(1);
                 }
+                // `-s ours` records the merge and keeps none of their work,
+                // conflicting or not (often meant as `-X ours`).
+                if matches!(name, "merge" | "pull" | "rebase")
+                    && keeps_none_of_theirs(&strings(&invocation.args))
+                {
+                    eprintln!(
+                        "✗ `-s ours` would record the merge and keep none of the other side's changes, not only the conflicting ones."
+                    );
+                    ui::hint(format!(
+                        "Merge normally and answer the questions with `gang bang`. (Plain git still does it: `gang git {name} -s ours …`.)"
+                    ));
+                    return Ok(1);
+                }
                 let auto_remap = Config::load(repo.root())
                     .map(|c| c.layers.auto_remap)
                     .unwrap_or(true);
@@ -423,6 +436,27 @@ fn refuse_settling(repo: &Repo, verb: &str, paths: &[String]) {
     ui::hint(format!(
         "Answer them with `gang bang`. (Plain git still does it: `gang git {verb} …`.)"
     ));
+}
+
+/// `-s ours` / `--strategy=ours`: the merge strategy that drops the other
+/// side entirely.
+fn keeps_none_of_theirs(args: &[String]) -> bool {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            break;
+        }
+        let value = if arg == "-s" || arg == "--strategy" {
+            iter.next().map(String::as_str)
+        } else {
+            arg.strip_prefix("--strategy=")
+                .or_else(|| arg.strip_prefix("-s").filter(|v| !v.is_empty()))
+        };
+        if value == Some("ours") {
+            return true;
+        }
+    }
+    false
 }
 
 /// `-X ours` / `-X theirs` (git settles every text conflict for one side):
