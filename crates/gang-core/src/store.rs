@@ -286,6 +286,25 @@ pub fn driver_merge(
         _ => ours,
     };
     let guids = crate::semantic::guid_index(repo);
+    // Fields renamed with [FormerlySerializedAs] on either side: the old
+    // key is written under its new name in all three versions (§13.10).
+    let renamed = if format == Format::Unity
+        && [base, ours, theirs]
+            .iter()
+            .any(|t| t.contains("MonoBehaviour"))
+    {
+        let renames = field_renames(repo, &guids, [base, ours, theirs]);
+        let fix = |text: &str| -> Option<String> {
+            let mut file = unity_yaml::parse(text).ok()?;
+            crate::renames::apply(&mut file, &renames).then(|| file.to_text())
+        };
+        [fix(base), fix(ours), fix(theirs)]
+    } else {
+        [None, None, None]
+    };
+    let base = renamed[0].as_deref().unwrap_or(base);
+    let ours = renamed[1].as_deref().unwrap_or(ours);
+    let theirs = renamed[2].as_deref().unwrap_or(theirs);
     let outcome = merge_texts(
         format,
         base,
@@ -331,6 +350,84 @@ pub fn driver_merge(
         );
     }
     Some((outcome.text, true))
+}
+
+/// Renames declared in the scripts of the MonoBehaviours in `texts`, by
+/// script GUID, read from both sides of the operation and the working tree.
+fn field_renames(
+    repo: &Repo,
+    guids: &unity_yaml::GuidIndex,
+    texts: [&str; 3],
+) -> BTreeMap<String, Vec<(String, String)>> {
+    let mut scripts: Vec<String> = Vec::new();
+    for text in texts {
+        for line in text.lines() {
+            let Some(rest) = line.trim().strip_prefix("m_Script:") else {
+                continue;
+            };
+            if let Some(guid) = rest
+                .split("guid:")
+                .nth(1)
+                .and_then(|g| g.split([',', '}']).next())
+                .map(|g| g.trim().to_owned())
+            {
+                if !scripts.contains(&guid) {
+                    scripts.push(guid);
+                }
+            }
+        }
+    }
+    // Both sides' commits: HEAD, the heads git names in GITHEAD_<sha> while
+    // it merges, and the operation's own head files.
+    let mut sides: Vec<String> = vec!["HEAD".to_owned()];
+    for (key, _) in std::env::vars() {
+        if let Some(sha) = key.strip_prefix("GITHEAD_") {
+            sides.push(sha.to_owned());
+        }
+    }
+    for head in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "REBASE_HEAD",
+    ] {
+        if repo.git_dir().join(head).exists() {
+            sides.push(head.to_owned());
+        }
+    }
+    if let Some(onto) = repo.rebase_onto() {
+        sides.push(onto);
+    }
+    let mut renames = BTreeMap::new();
+    for guid in scripts {
+        let Some(path) = guids.path(&guid) else {
+            continue;
+        };
+        if !path.ends_with(".cs") {
+            continue;
+        }
+        let mut pairs: Vec<(String, String)> = Vec::new();
+        let mut versions: Vec<String> = sides
+            .iter()
+            .filter_map(|side| {
+                crate::semantic::blob(repo, &format!("{side}:{path}"))
+                    .ok()
+                    .flatten()
+            })
+            .collect();
+        versions.extend(crate::semantic::worktree(repo, path));
+        for source in versions {
+            for pair in crate::renames::declared(&source) {
+                if !pairs.contains(&pair) {
+                    pairs.push(pair);
+                }
+            }
+        }
+        if !pairs.is_empty() {
+            renames.insert(guid, pairs);
+        }
+    }
+    renames
 }
 
 /// The layer index of a TagManager `layers` conflict (`…/layers/[8]`).

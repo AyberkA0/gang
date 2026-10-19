@@ -1310,3 +1310,40 @@ fn a_removed_layer_still_in_use_is_reported() {
         "{doctor:?}"
     );
 }
+
+/// Thought experiment TE7: Alice renames a field with [FormerlySerializedAs]
+/// and her scene now says `jump:`; Bob changes the old `jumpHeight:`. Bob's
+/// value lands in the renamed field, without a question.
+#[test]
+fn a_renamed_field_keeps_the_other_side_s_change() {
+    let team = Team::new();
+    let guid = "0000000000000000000000000000aaaa";
+    let level = |key: &str, value: &str| {
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &200\nGameObject:\n  m_Component:\n  - component: {{fileID: 202}}\n  m_Name: Player\n--- !u!114 &202\nMonoBehaviour:\n  m_GameObject: {{fileID: 200}}\n  m_Script: {{fileID: 11500000, guid: {guid}, type: 3}}\n  speed: 1\n  {key}: {value}\n"
+        )
+    };
+    let path = "Assets/Scenes/Renamed.unity";
+    for user in ["alice", "bob"] {
+        team.write(user, path, &level("jumpHeight", "2.5"));
+        team.write(
+            user,
+            &format!("{path}.meta"),
+            "fileFormatVersion: 2\nguid: 0000000000000000000000000000abcd\n",
+        );
+    }
+    assert_eq!(team.sync("alice", "renamed scene").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    team.write(
+        "alice",
+        "Assets/Scripts/Player.cs",
+        "using UnityEngine.Serialization;\nclass Player\n{\n    int speed = 1;\n    [FormerlySerializedAs(\"jumpHeight\")] public float jump;\n}\n",
+    );
+    team.write("alice", path, &level("jump", "2.5"));
+    assert_eq!(team.sync("alice", "rename jump").code, Some(0));
+    team.write("bob", path, &level("jumpHeight", "4"));
+    let sync = team.sync("bob", "higher jump");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert_eq!(team.read("bob", path), level("jump", "4"));
+}

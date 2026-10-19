@@ -22,6 +22,7 @@ pub mod managed;
 pub use gang_merge::matrix;
 pub mod prefab_ids;
 pub mod presence;
+pub mod renames;
 pub mod repo;
 pub mod safety;
 pub mod semantic;

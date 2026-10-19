@@ -729,6 +729,10 @@ GANG compares the two versions of every changed prefab. Objects are matched by t
 - **`gang save`** (before staging): prefabs changed since the merge base with the upstream (unpushed commits and the working tree) are compared, and every scene, prefab and asset in the working tree that points at an old id is rewritten to the new id, byte for byte everywhere else. The save prints what moved and which references point at objects that are gone. Unity must be closed, as for the layer move.
 - **`gang sync`** (after the merge): a teammate's rebuild that came in is compared the same way; our files that still point at old ids (our unpushed scenes) are rewritten and committed as `gang: point references at the rebuilt Imp.prefab`.
 
+### 13.10 Renamed fields
+
+A field renamed in code with `[FormerlySerializedAs("speed")] float moveSpeed;` makes Unity write `moveSpeed:` into the scenes and prefabs of whoever renamed it, while a teammate's files still say `speed:`. Merged key by key, the teammate's change to `speed` would be dropped or become a meaningless question. Before merging a Unity file, the merge driver reads the `FormerlySerializedAs` renames from the scripts of its MonoBehaviours, in every version it can reach (HEAD, the heads git is merging, the operation's head files and the working tree), and writes an old key under its new name in all three versions. The teammate's value then lands in the renamed field. Not covered yet: prefab overrides whose `propertyPath` names the old field.
+
 ## 14. Special files
 
 ### 14.1 TagManager
