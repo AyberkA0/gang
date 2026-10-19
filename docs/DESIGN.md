@@ -720,6 +720,15 @@ Violations become conflicts, never silent output:
 - 3-way merge of a 50 MB scene: < 2 s on a laptop.
 - Noise check of a typical scene for presence: < 200 ms (with cache).
 
+### 13.9 Prefab identity
+
+Other files point at the objects inside a prefab by the prefab's GUID and the object's fileID (`{fileID: 4821937561, guid: …, type: 3}`): instance overrides (`m_Modifications[].target`), stripped copies (`m_CorrespondingSourceObject`), removed components, references. Rebuilding a prefab (turning it into a variant, recreating it from a model) keeps its GUID but gives every object a new fileID, and Unity silently drops every override that pointed at an old id: placed instances fall back to the prefab's position and name (field test A1).
+
+GANG compares the two versions of every changed prefab. Objects are matched by their place in the prefab: the owning object's hierarchy path, the document's class, and its order among that object's documents of the same class. An old id with a new counterpart is **moved**; one without is **gone**.
+
+- **`gang save`** (before staging): prefabs changed since the merge base with the upstream (unpushed commits and the working tree) are compared, and every scene, prefab and asset in the working tree that points at an old id is rewritten to the new id, byte for byte everywhere else. The save prints what moved and which references point at objects that are gone. Unity must be closed, as for the layer move.
+- **`gang sync`** (after the merge): a teammate's rebuild that came in is compared the same way; our files that still point at old ids (our unpushed scenes) are rewritten and committed as `gang: point references at the rebuilt Imp.prefab`.
+
 ## 14. Special files
 
 ### 14.1 TagManager

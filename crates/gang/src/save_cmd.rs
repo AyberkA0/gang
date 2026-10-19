@@ -54,6 +54,10 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
     if let Some(code) = crate::layers_cmd::before_save(&repo)? {
         return Ok(code);
     }
+    // A rebuilt prefab: point the scenes' references at its new objects.
+    if let Some(code) = crate::prefabs_cmd::before_save(&repo)? {
+        return Ok(code);
+    }
 
     // A refused save must leave the index exactly as it was.
     let index_before = repo.try_run(["write-tree"])?.map(|t| t.trim().to_owned());

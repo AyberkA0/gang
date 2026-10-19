@@ -331,6 +331,9 @@ fn merge(
     let _ = invocation;
     summarize(repo, &before, &names);
     warn_about_my_locks(repo, &before);
+    if let Err(err) = crate::prefabs_cmd::after_merge(repo, &before) {
+        ui::warn(format!("could not check rebuilt prefabs: {err:#}"));
+    }
     Ok(0)
 }
 

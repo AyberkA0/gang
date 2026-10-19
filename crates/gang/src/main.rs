@@ -7,6 +7,7 @@ mod layers_cmd;
 mod locks_cmd;
 mod panel;
 mod plumbing;
+mod prefabs_cmd;
 mod presence_cmd;
 mod save_cmd;
 mod semantic_cmd;
