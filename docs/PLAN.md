@@ -184,7 +184,9 @@ Sizes are rough relative estimates for one full-time developer: **S** ≈ a few 
 - [x] Auto-trigger after merging commands; non-TTY hint; `--abort` clears stored conflicts.
 - [x] `gang sync` (DESIGN §18.1) with retry when someone pushed meanwhile; `pull` / `merge` / `rebase` wrappers; automatic-merge summary. Post-merge integrity warnings come with P11.
 
-**Done when:** pty-driven tests (`expectrl`) cover every conflict kind; the WORKFLOW.md day is replayed end to end by the harness with four clones.
+- [x] pty-driven tests (`crates/gang/tests/interactive.rs`, `portable-pty`, ConPTY on Windows): the sync offer, every conflict kind (value, move, order, deleted by you / them, package, code hunk, binary) with keys m / t / b / o / e / u / M / T / ? / q and delete / keep / re-parent, quit and resume, the release prompt after push, and the extra `gang status` sections.
+
+**Done when:** pty-driven tests (`portable-pty`) cover every conflict kind; the WORKFLOW.md day is replayed end to end by the harness with four clones.
 
 > **M3 reached.**
 
