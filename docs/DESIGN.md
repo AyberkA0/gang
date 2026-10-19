@@ -731,7 +731,7 @@ GANG compares the two versions of every changed prefab. Objects are matched by t
 
 ### 13.10 Renamed fields
 
-A field renamed in code with `[FormerlySerializedAs("speed")] float moveSpeed;` makes Unity write `moveSpeed:` into the scenes and prefabs of whoever renamed it, while a teammate's files still say `speed:`. Merged key by key, the teammate's change to `speed` would be dropped or become a meaningless question. Before merging a Unity file, the merge driver reads the `FormerlySerializedAs` renames from the scripts of its MonoBehaviours, in every version it can reach (HEAD, the heads git is merging, the operation's head files and the working tree), and writes an old key under its new name in all three versions. The teammate's value then lands in the renamed field. Not covered yet: prefab overrides whose `propertyPath` names the old field.
+A field renamed in code with `[FormerlySerializedAs("speed")] float moveSpeed;` makes Unity write `moveSpeed:` into the scenes and prefabs of whoever renamed it, while a teammate's files still say `speed:`. Merged key by key, the teammate's change to `speed` would be dropped or become a meaningless question. Before merging a Unity file, the merge driver reads the `FormerlySerializedAs` renames from the scripts of its MonoBehaviours, in every version it can reach (HEAD, the heads git is merging, the operation's head files and the working tree), and writes an old key under its new name in all three versions. The teammate's value then lands in the renamed field. Prefab instances' overrides whose `propertyPath` names the old field (`speed`, `speed.x`) are renamed the same way; the script behind each override's target is found by opening the source prefab.
 
 ## 14. Special files
 

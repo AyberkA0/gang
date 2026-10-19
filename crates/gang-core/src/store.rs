@@ -291,12 +291,67 @@ pub fn driver_merge(
     let renamed = if format == Format::Unity
         && [base, ours, theirs]
             .iter()
-            .any(|t| t.contains("MonoBehaviour"))
+            .any(|t| t.contains("MonoBehaviour") || t.contains("PrefabInstance"))
     {
-        let renames = field_renames(repo, &guids, [base, ours, theirs]);
+        // The script behind a document of a source prefab, for overrides.
+        let prefabs: std::cell::RefCell<HashMap<String, Option<unity_yaml::File>>> =
+            std::cell::RefCell::new(HashMap::new());
+        let script_of = |guid: &str, id: unity_yaml::FileId| -> Option<String> {
+            let mut cache = prefabs.borrow_mut();
+            let prefab = cache.entry(guid.to_owned()).or_insert_with(|| {
+                let path = guids.path(guid)?;
+                crate::semantic::worktree(repo, path).and_then(|t| unity_yaml::parse(&t).ok())
+            });
+            prefab
+                .as_ref()?
+                .doc(id)?
+                .body()?
+                .get("m_Script")?
+                .as_ref()?
+                .guid
+        };
+        let mut targeted = Vec::new();
+        for text in [base, ours, theirs] {
+            if let Ok(file) = unity_yaml::parse(text) {
+                for doc in file
+                    .docs
+                    .iter()
+                    .filter(|d| d.type_name() == Some("PrefabInstance"))
+                {
+                    let items = doc
+                        .body()
+                        .and_then(|b| b.get("m_Modification"))
+                        .and_then(unity_yaml::Value::as_map)
+                        .and_then(|m| m.get("m_Modifications"))
+                        .and_then(unity_yaml::Value::as_seq)
+                        .unwrap_or(&[]);
+                    for item in items {
+                        let target = item
+                            .value()
+                            .as_map()
+                            .and_then(|m| m.get("target"))
+                            .and_then(unity_yaml::Value::as_ref);
+                        if let Some(script) = target
+                            .and_then(|t| t.guid.clone().map(|g| (g, t.file_id)))
+                            .and_then(|(g, id)| script_of(&g, id))
+                        {
+                            if !targeted.contains(&script) {
+                                targeted.push(script);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let renames = field_renames(repo, &guids, [base, ours, theirs], &targeted);
         let fix = |text: &str| -> Option<String> {
+            if renames.is_empty() {
+                return None;
+            }
             let mut file = unity_yaml::parse(text).ok()?;
-            crate::renames::apply(&mut file, &renames).then(|| file.to_text())
+            let fields = crate::renames::apply(&mut file, &renames);
+            let overrides = crate::renames::apply_overrides(&mut file, &renames, &script_of);
+            (fields || overrides).then(|| file.to_text())
         };
         [fix(base), fix(ours), fix(theirs)]
     } else {
@@ -358,8 +413,9 @@ fn field_renames(
     repo: &Repo,
     guids: &unity_yaml::GuidIndex,
     texts: [&str; 3],
+    also: &[String],
 ) -> BTreeMap<String, Vec<(String, String)>> {
-    let mut scripts: Vec<String> = Vec::new();
+    let mut scripts: Vec<String> = also.to_vec();
     for text in texts {
         for line in text.lines() {
             let Some(rest) = line.trim().strip_prefix("m_Script:") else {

@@ -161,3 +161,61 @@ fn instance_overrides_read_like_the_inspector() {
     );
     assert!(!sync.stdout.contains("m_Modifications"), "{sync:?}");
 }
+
+/// Thought experiment TE7, overrides: an instance overrides a field that the
+/// prefab's script renames with [FormerlySerializedAs]; the teammate's new
+/// value follows the rename.
+#[test]
+fn an_override_of_a_renamed_field_keeps_the_teammate_s_value() {
+    let team = Team::new();
+    let script_guid = "5c41d1d1d1d1d1d1d1d1d1d1d1d1d1d1";
+    let prefab = imp([1, 2, 3]).replace(
+        "MonoBehaviour:\n  m_GameObject: {fileID: 1}\n",
+        &format!("MonoBehaviour:\n  m_GameObject: {{fileID: 1}}\n  m_Script: {{fileID: 11500000, guid: {script_guid}, type: 3}}\n"),
+    );
+    let scene = |property: &str, value: &str| {
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1001 &500\nPrefabInstance:\n  m_Modification:\n    m_TransformParent: {{fileID: 0}}\n    m_Modifications:\n    - target: {{fileID: 3, guid: {GUID}, type: 3}}\n      propertyPath: {property}\n      value: {value}\n      objectReference: {{fileID: 0}}\n    m_RemovedComponents: []\n  m_SourcePrefab: {{fileID: 100100000, guid: {GUID}, type: 3}}\n"
+        )
+    };
+    for user in ["alice", "bob"] {
+        team.write(user, PREFAB, &prefab);
+        std::fs::create_dir_all(team.sandbox.dir.path().join(user).join("Assets/Scripts")).unwrap();
+        team.write(
+            user,
+            "Assets/Scripts/Imp.cs",
+            "class Imp\n{\n    public float speed = 3;\n}\n",
+        );
+        team.write(
+            user,
+            "Assets/Scripts/Imp.cs.meta",
+            &format!("fileFormatVersion: 2\nguid: {script_guid}\n"),
+        );
+        team.write(
+            user,
+            "Assets/Scripts.meta",
+            "fileFormatVersion: 2\nguid: 0000000000000000000000000000cccc\nfolderAsset: yes\n",
+        );
+        team.write(user, SCENE, &scene("speed", "5"));
+    }
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "imp script"]).code,
+        Some(0)
+    );
+    assert_eq!(team.gang("bob", &["sync", "-m", "-"]).code, Some(0));
+
+    team.write(
+        "alice",
+        "Assets/Scripts/Imp.cs",
+        "using UnityEngine.Serialization;\nclass Imp\n{\n    [FormerlySerializedAs(\"speed\")] public float moveSpeed = 3;\n}\n",
+    );
+    team.write("alice", SCENE, &scene("moveSpeed", "5"));
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "rename speed"]).code,
+        Some(0)
+    );
+    team.write("bob", SCENE, &scene("speed", "9"));
+    let sync = team.gang("bob", &["sync", "-m", "faster imp"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert_eq!(team.read("bob", SCENE), scene("moveSpeed", "9"));
+}

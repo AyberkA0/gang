@@ -90,7 +90,7 @@ Mapped from `GANG-NEXT.md` (sections A–D). Status is as of this document.
 | D6 | `gang save` accepts only one `-m` | P3 | **Fixed in this round** |
 | C3 | `lock --auto` skips the work it should protect; `--dry-run` silent for objects | P2 | **Fixed in round 2**: the objects we changed in a shared scene are auto-locked |
 | C4 | Scene rename gaps | P2 | **Fixed in round 2**: the bake folder moves with the scene, Build Settings follow, exact renames need no bake lock |
-| C5 | Bake lock does not cover NavMeshSurface | P2 | Open |
+| C5 | Bake lock does not cover NavMeshSurface | P2 | **Fixed in round 2**: NavMeshSurface components and their data are part of the bake lock |
 | C6 | `mv` into a missing folder | P2 | **Fixed in round 2**: the folder is created with its `.meta` |
 | C7 | No GANG summary when the push fails after a merge | P2 | **Fixed** (`push_failed`) |
 | C8 | Layer review list not shown | P2 | **Fixed** (L8) |
@@ -158,10 +158,12 @@ Forty-eight team scenarios were walked through ("what would GANG do?"). Most wer
 
 | # | Scenario | Before | Now |
 |---|---|---|---|
-| TE7 | A field renamed with `[FormerlySerializedAs]` on one side, its old key changed on the other | The teammate's change was dropped or became a meaningless question | Renames read from both sides' scripts; old keys are merged under their new names (DESIGN §13.10) |
+| TE7 | A field renamed with `[FormerlySerializedAs]` on one side, its old key changed on the other (in a scene, a prefab, or an instance's override) | The teammate's change was dropped or became a meaningless question | Renames read from both sides' scripts; old keys and override paths are merged under their new names (DESIGN §13.10) |
 | TE9 | A texture edited on one side, its folder moved on the other | — | Checked: git's `ort` merge follows the rename; nothing to do |
 | TE24 | Scripting define symbols changed on both sides (`A;B;NETCODE` vs `B;DEBUG_AI`) | A value conflict | Merged as a set |
 | TE27 | A pull request merged with GitHub's button | GitHub's line merge, without GANG's driver: valid YAML, wrong scene | `gang pr merge <n>` (DESIGN §18.4) |
+| TE65 | A layer reserved on a feature branch, its author back on main | The reservation was released; a teammate could take the number | Kept while a local branch has the name |
+| TE74 | A list with an insert at the front on one side and an edit at the end on the other | A whole-list question | diff3 on the items; the same stretch changed twice still asks |
 | TE42 | A layer removed on one side while the other puts objects on it | Silent: the objects end up on a layer with no name | Reported during the sync; `gang doctor` lists objects on unnamed layers and undefined tags |
 | A1 | A prefab rebuilt with new ids | Instances lost their overrides silently | References repointed (DESIGN §13.9) |
 | §1.3 | A Unity file the parser rejects | Conflict markers in the file | Clean line merge or a whole-file question |
@@ -175,7 +177,5 @@ A binary store on a side ref ("a GANG branch for binaries", with pointer files i
 
 ### 5.6 Still open
 
-- C5: the bake lock does not cover `NavMeshSurface.navMeshData`.
-- Prefab overrides whose `propertyPath` names a renamed field (TE7 covers scene and prefab fields, not overrides).
 - Owner tasks (F1–F3): OAuth App, GitHub Actions billing, first release.
 - A second field test: three people, one on macOS, alternating who pushes first, a feature branch, a rebase day, and a gameplay smoke check.
