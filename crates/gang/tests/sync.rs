@@ -1769,3 +1769,52 @@ fn a_stash_pop_asks_with_the_stash_as_mine() {
         "{answer:?}"
     );
 }
+
+/// R33, the incoming side: a teammate committed a script with conflict
+/// markers past GANG's hooks (`--no-verify`, or a clone without GANG).
+#[test]
+fn conflict_markers_that_come_in_are_reported() {
+    let team = Team::new();
+    team.write(
+        "alice",
+        "Assets/Scripts/Player.cs",
+        "class Player\n{\n<<<<<<< HEAD\n    int speed = 2;\n=======\n    int speed = 3;\n>>>>>>> main\n}\n",
+    );
+    assert_eq!(
+        team.gang(
+            "alice",
+            &[
+                "git",
+                "commit",
+                "-q",
+                "--no-verify",
+                "-am",
+                "merged by hand"
+            ]
+        )
+        .code,
+        Some(0)
+    );
+    assert_eq!(
+        team.gang("alice", &["git", "push", "-q", "--no-verify"])
+            .code,
+        Some(0)
+    );
+
+    team.write("bob", SCENE, &scene("1", "2.5", ""));
+    let sync = team.sync("bob", "move player");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr
+            .contains("Assets/Scripts/Player.cs came in with conflict markers (")
+            && sync.stderr.contains("the scripts will not compile"),
+        "{sync:?}"
+    );
+    let doctor = team.gang("bob", &["doctor"]);
+    assert!(
+        doctor
+            .stdout
+            .contains("Assets/Scripts/Player.cs has conflict markers committed (since "),
+        "{doctor:?}"
+    );
+}

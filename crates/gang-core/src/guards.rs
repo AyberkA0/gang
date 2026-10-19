@@ -249,6 +249,8 @@ pub fn check_staged(repo: &Repo, allow: &Allow) -> Result<Vec<Finding>> {
         ));
     }
     check_guids(repo, &changes, &mut findings)?;
+    check_markers(repo, &changes, &mut findings)?;
+    check_local_only(repo, &changes, &index, &projects, &mut findings)?;
     check_sizes(repo, &changes, &mut findings)?;
     check_unity_version(&changes, &projects, allow, &mut findings);
 
@@ -494,6 +496,186 @@ fn check_guids(repo: &Repo, changes: &[Change], findings: &mut Vec<Finding>) -> 
                     others.join(", ")
                 ),
                 Some("delete the copy's .meta and let Unity create a new one".to_owned()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Files with git's conflict markers in them, at `rev` (`None`: the
+/// index), among `paths`.
+pub fn with_markers(repo: &Repo, rev: Option<&str>, paths: &[&str]) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    // In batches: Windows limits a command line to 32k characters.
+    for batch in paths.chunks(200) {
+        let mut args: Vec<&str> = vec![
+            "grep",
+            "-l",
+            "-z",
+            "-I",
+            "-E",
+            "-e",
+            "^<<<<<<< ",
+            "-e",
+            "^>>>>>>> ",
+        ];
+        match rev {
+            Some(rev) => args.push(rev),
+            None => args.push("--cached"),
+        }
+        args.push("--");
+        args.extend(batch.iter().copied());
+        let output = repo.try_run(args)?.unwrap_or_default();
+        for path in split_nul(&output) {
+            let path = match rev {
+                Some(rev) => path
+                    .strip_prefix(rev)
+                    .and_then(|p| p.strip_prefix(':'))
+                    .map(str::to_owned)
+                    .unwrap_or(path),
+                None => path,
+            };
+            found.push(path);
+        }
+    }
+    Ok(found)
+}
+
+/// Leftover conflict markers (R33): Unity cannot open the asset, or the
+/// team's scripts stop compiling. `gang bang` never leaves any; a merge
+/// finished by hand in an editor, or with plain git, can.
+fn check_markers(repo: &Repo, changes: &[Change], findings: &mut Vec<Finding>) -> Result<()> {
+    let paths: Vec<&str> = changes
+        .iter()
+        .filter(|c| !c.deletes() && crate::attributes::breaks_with_markers(&c.path))
+        .map(|c| c.path.as_str())
+        .collect();
+    if paths.is_empty() {
+        return Ok(());
+    }
+    for path in with_markers(repo, None, &paths)? {
+        let what = if crate::attributes::is_code(&path) {
+            "the team's scripts would stop compiling"
+        } else {
+            "Unity cannot open it"
+        };
+        findings.push(Finding::block(
+            &path,
+            format!("still has conflict markers (<<<<<<< … >>>>>>>); {what}"),
+            Some(format!(
+                "remove the markers (keep the lines you want from each side), then gang add {}",
+                quote(&path)
+            )),
+        ));
+    }
+    Ok(())
+}
+
+/// A scene or prefab in the commit that uses an asset only this machine
+/// has (R34): untracked, left out of a path-limited save, or ignored. It
+/// works here and shows as Missing for everyone else.
+fn check_local_only(
+    repo: &Repo,
+    changes: &[Change],
+    index: &BTreeSet<String>,
+    projects: &[UnityProject],
+    findings: &mut Vec<Finding>,
+) -> Result<()> {
+    let users: Vec<&str> = changes
+        .iter()
+        .filter(|c| !c.deletes() && crate::attributes::is_unity_yaml(&c.path))
+        .map(|c| c.path.as_str())
+        .collect();
+    if users.is_empty() {
+        return Ok(());
+    }
+    // Every GUID the commit's metas have.
+    let committed: BTreeSet<String> = repo
+        .try_run([
+            "grep", "--cached", "-h", "-I", "-e", "^guid: ", "--", "*.meta",
+        ])?
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.strip_prefix("guid: "))
+        .map(|g| g.trim().to_owned())
+        .collect();
+    let mut wanted: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for user in &users {
+        let Some(text) = crate::semantic::blob(repo, &format!(":{user}"))? else {
+            continue;
+        };
+        let mut seen = BTreeSet::new();
+        for (i, _) in text.match_indices("guid: ") {
+            let Some(guid) = text.get(i + 6..i + 38) else {
+                continue;
+            };
+            if guid.bytes().all(|b| b.is_ascii_hexdigit())
+                && !committed.contains(guid)
+                && seen.insert(guid.to_owned())
+            {
+                wanted
+                    .entry(guid.to_owned())
+                    .or_default()
+                    .push((*user).to_owned());
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    // Only GUIDs of assets this machine has and the commit lacks: the
+    // untracked (or ignored) metas in the projects. Package and built-in
+    // assets are in no project, here or anywhere.
+    let mut local: BTreeMap<String, String> = BTreeMap::new();
+    for project in projects {
+        for folder in ["Assets/", "Packages/"] {
+            let spec = format!("{}*.meta", project.join(folder));
+            let metas = repo
+                .try_run(["ls-files", "-z", "--others", "--", &spec])?
+                .unwrap_or_default();
+            for meta in split_nul(&metas) {
+                let Ok(text) = std::fs::read_to_string(repo.root().join(&meta)) else {
+                    continue;
+                };
+                if let Some(guid) = crate::guid_moves::guid_of(&text) {
+                    let asset = meta.strip_suffix(".meta").unwrap_or(&meta).to_owned();
+                    local.insert(guid, asset);
+                }
+            }
+        }
+    }
+    for (guid, users) in wanted {
+        let Some(asset) = local.get(&guid).map(String::as_str) else {
+            continue;
+        };
+        if index.contains(asset) && index.contains(&format!("{asset}.meta")) {
+            continue;
+        }
+        let ignored = repo.try_run(["check-ignore", "-q", "--", asset])?.is_some();
+        let (why, fix) = if ignored {
+            (
+                "is ignored (.gitignore)",
+                format!(
+                    "gang add -f {} {}",
+                    quote(asset),
+                    quote(&format!("{asset}.meta"))
+                ),
+            )
+        } else {
+            (
+                "is not in the commit",
+                format!(
+                    "gang add {} {}",
+                    quote(asset),
+                    quote(&format!("{asset}.meta"))
+                ),
+            )
+        };
+        for user in users {
+            findings.push(Finding::block(
+                &user,
+                format!("uses {asset}, which {why}: teammates would get a Missing reference"),
+                Some(fix.clone()),
             ));
         }
     }

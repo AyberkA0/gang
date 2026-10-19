@@ -940,6 +940,9 @@ Global keys: `?` details, `u` undo the last answer, `q` quit and keep progress.
 | Asset without `.meta`, `.meta` without asset | add, commit | Block (auto-fix offered) |
 | `.meta` of an empty folder | commit, doctor | Warn (auto-fix offered) |
 | Duplicate GUIDs | commit, doctor | Block |
+| Conflict markers left in Unity files, code, `.meta`, assembly definitions or the package manifest | commit; after a merge and in doctor for markers that came in | Block / warn |
+| Asset deleted while staged files still reference it (§13.11) | commit | Warn |
+| Folder left empty by the commit, its `.meta` kept | save (removed with it), commit | Auto-fixed / warn |
 | OS junk (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `._*`, …) — built-in deny list, independent of `.gitignore` | add, commit | Block (silently unstaged) |
 | Paths differing only in case (from each other or from tracked paths) | add, commit | Block |
 | Windows-invalid names (`< > : " \| ? *`, trailing dot or space, `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`9`, `LPT1`–`9`) | add, commit | Block |
@@ -952,7 +955,7 @@ Global keys: `?` details, `u` undo the last answer, `q` quit and keep progress.
 | Signing keys (`*.keystore`, `*.jks`) | add | Ask |
 | Unity open (`Temp/UnityLockfile` cannot be locked) | E-layer commands | Block (or warn, see §18.3) |
 
-Pre-push additionally checks reference integrity of what is being pushed: GUIDs referenced but not present, missing prefab sources, prefab override targets that no longer exist.
+A commit is also stopped when a scene, prefab or asset in it uses an asset only this machine has (its `.meta` is in the project folder but not in the commit: untracked, left out of a path-limited save, or ignored), since it would be Missing for everyone else (HARDENING R34). References that no machine can resolve (package and built-in assets) are not judged here; `gang doctor` lists missing references with the commit that deleted the asset (§13.11).
 
 ## 17. Managed ignore and attributes
 

@@ -130,6 +130,25 @@ pub fn is_unity_yaml(path: &str) -> bool {
     extension.is_some_and(|e| UNITY_YAML.contains(&e))
 }
 
+/// Whether the path is code Unity compiles or loads (scripts, shaders, UI
+/// Toolkit files).
+pub fn is_code(path: &str) -> bool {
+    let extension = path.rsplit_once('.').map(|(_, e)| e);
+    extension.is_some_and(|e| CODE.contains(&e))
+}
+
+/// Files a leftover conflict marker breaks for the whole team: Unity
+/// cannot open the asset, or the scripts stop compiling (R33).
+pub fn breaks_with_markers(path: &str) -> bool {
+    is_unity_yaml(path)
+        || is_code(path)
+        || path.ends_with(".meta")
+        || path.ends_with(".asmdef")
+        || path.ends_with(".asmref")
+        || path.ends_with("Packages/manifest.json")
+        || path.ends_with("Packages/packages-lock.json")
+}
+
 /// The generated block. With `lfs`, binaries go to Git LFS; without it they
 /// stay plain git files marked binary, so git never treats them as text.
 pub fn block(lfs: bool) -> String {

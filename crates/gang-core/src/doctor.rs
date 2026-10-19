@@ -191,6 +191,53 @@ pub fn run(repo: &Repo) -> Result<Vec<Check>> {
         }
     }
 
+    // Conflict markers committed by a merge finished by hand (R33).
+    if repo
+        .try_run(["rev-parse", "-q", "--verify", "HEAD"])?
+        .is_some()
+    {
+        let mut specs: Vec<String> = attributes::UNITY_YAML
+            .iter()
+            .map(|e| format!("*.{e}"))
+            .collect();
+        specs.extend(
+            [
+                "cs", "shader", "hlsl", "cginc", "compute", "uss", "uxml", "meta", "asmdef",
+                "asmref", "json",
+            ]
+            .iter()
+            .map(|e| format!("*.{e}")),
+        );
+        let specs: Vec<&str> = specs.iter().map(String::as_str).collect();
+        for path in guards::with_markers(repo, Some("HEAD"), &specs)?
+            .into_iter()
+            .filter(|p| attributes::breaks_with_markers(p))
+        {
+            let by = repo
+                .try_run([
+                    "log",
+                    "-1",
+                    "--format=%h by %an",
+                    "-S",
+                    "<<<<<<< ",
+                    "HEAD",
+                    "--",
+                    &path,
+                ])?
+                .map(|l| l.trim().to_owned())
+                .filter(|l| !l.is_empty())
+                .map(|l| format!(" (since {l})"))
+                .unwrap_or_default();
+            checks.push(check(
+                Level::Problem,
+                "files",
+                format!("{path} has conflict markers committed{by}"),
+                Some("remove the markers (keep the lines you want from each side) and commit"),
+                false,
+            ));
+        }
+    }
+
     // References between files.
     checks.extend(references(repo, &projects, &tracked)?);
 

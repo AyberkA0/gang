@@ -392,3 +392,128 @@ fn renaming_a_scene_takes_its_folder_and_build_settings_along() {
 fn tracked_after_add(sandbox: &Sandbox) -> String {
     sandbox.run("git", &["ls-files"]).stdout
 }
+
+/// Thought experiment R33: a conflict finished by hand in an editor, with a
+/// marker left behind. Unity cannot open the scene, and a script with one
+/// stops compiling for the whole team.
+#[test]
+fn leftover_conflict_markers_are_blocked() {
+    let sandbox = project();
+    sandbox.write(
+        "Assets/Player.cs",
+        "class Player\n{\n<<<<<<< HEAD\n    int speed = 2;\n=======\n    int speed = 3;\n>>>>>>> main\n}\n",
+    );
+    sandbox.write(
+        "Assets/Player.cs.meta",
+        "fileFormatVersion: 2\nguid: cccccccccccccccccccccccccccccccc\n",
+    );
+    sandbox.write("Assets/Notes.md", "<<<<<<< an example in the docs\n");
+    sandbox.write(
+        "Assets/Notes.md.meta",
+        "fileFormatVersion: 2\nguid: dddddddddddddddddddddddddddddddd\n",
+    );
+    sandbox.git(&["add", "-A"]);
+    let commit = sandbox.run("git", &["commit", "-m", "merged by hand"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(
+        commit.stderr.contains(
+            "Assets/Player.cs: still has conflict markers (<<<<<<< … >>>>>>>); the team's scripts would stop compiling"
+        ),
+        "{commit:?}"
+    );
+    assert!(!commit.stderr.contains("Notes.md: still"), "{commit:?}");
+
+    sandbox.write(
+        "Assets/Player.cs",
+        "class Player\n{\n    int speed = 3;\n}\n",
+    );
+    sandbox.git(&["add", "-A"]);
+    let commit = sandbox.run("git", &["commit", "-q", "-m", "merged by hand"]);
+    assert_eq!(commit.code, Some(0), "{commit:?}");
+}
+
+/// Thought experiment R34: a new material assigned in a scene, the scene
+/// committed and the material not. It works here and is Missing for
+/// everyone else.
+#[test]
+fn a_commit_using_an_asset_only_this_machine_has_is_blocked() {
+    let sandbox = project();
+    let scene = |guids: &[&str]| {
+        let mut text = String::from(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!23 &1\nMeshRenderer:\n  m_Materials:\n",
+        );
+        for guid in guids {
+            text.push_str(&format!("  - {{fileID: 2100000, guid: {guid}, type: 2}}\n"));
+        }
+        text
+    };
+    let new_mat = "1234567890abcdef1234567890abcdef";
+    let package_mat = "fedcba0987654321fedcba0987654321";
+    sandbox.write(
+        "Assets/Art/New.mat",
+        "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n  m_Name: New\n",
+    );
+    sandbox.write(
+        "Assets/Art/New.mat.meta",
+        &format!("fileFormatVersion: 2\nguid: {new_mat}\n"),
+    );
+    sandbox.write("Assets/Level.unity", &scene(&[new_mat, package_mat]));
+    sandbox.write(
+        "Assets/Level.unity.meta",
+        "fileFormatVersion: 2\nguid: 99999999999999999999999999999999\n",
+    );
+    sandbox.git(&["add", "Assets/Level.unity", "Assets/Level.unity.meta"]);
+    let commit = sandbox.run("git", &["commit", "-m", "level"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(
+        commit.stderr.contains(
+            "Assets/Level.unity: uses Assets/Art/New.mat, which is not in the commit: teammates would get a Missing reference"
+        ),
+        "{commit:?}"
+    );
+    assert!(
+        commit
+            .stderr
+            .contains("Fix: gang add Assets/Art/New.mat Assets/Art/New.mat.meta"),
+        "{commit:?}"
+    );
+    assert!(!commit.stderr.contains(package_mat), "{commit:?}");
+
+    // Ignored: the fix says so.
+    fs::create_dir_all(sandbox.repo.join("Assets/Local")).unwrap();
+    fs::rename(
+        sandbox.repo.join("Assets/Art/New.mat"),
+        sandbox.repo.join("Assets/Local/New.mat"),
+    )
+    .unwrap();
+    fs::rename(
+        sandbox.repo.join("Assets/Art/New.mat.meta"),
+        sandbox.repo.join("Assets/Local/New.mat.meta"),
+    )
+    .unwrap();
+    let ignore = fs::read_to_string(sandbox.repo.join(".gitignore")).unwrap();
+    sandbox.write(".gitignore", &format!("{ignore}Assets/Local/\n"));
+    let commit = sandbox.run("git", &["commit", "-m", "level"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(
+        commit
+            .stderr
+            .contains("uses Assets/Local/New.mat, which is ignored (.gitignore)"),
+        "{commit:?}"
+    );
+    assert!(
+        commit.stderr.contains("gang add -f Assets/Local/New.mat"),
+        "{commit:?}"
+    );
+
+    // In the commit: fine.
+    sandbox.write(".gitignore", &ignore);
+    fs::write(
+        sandbox.repo.join("Assets/Local.meta"),
+        "fileFormatVersion: 2\nguid: 88888888888888888888888888888888\nfolderAsset: yes\n",
+    )
+    .unwrap();
+    sandbox.git(&["add", "-A"]);
+    let commit = sandbox.run("git", &["commit", "-q", "-m", "level"]);
+    assert_eq!(commit.code, Some(0), "{commit:?}");
+}

@@ -104,9 +104,57 @@ pub fn before_save(repo: &Repo) -> Result<Option<i32>> {
 /// made that the merge left pointing at nothing are fixed, each kind in a
 /// commit of its own.
 pub fn after_merge(repo: &Repo, before: &str) -> Result<()> {
+    incoming_markers(repo, before)?;
     rebuilt_prefabs(repo, before)?;
     shared_guids(repo, before)?;
     deleted_in_use(repo, before)
+}
+
+/// Conflict markers that came in with the merge: a teammate finished a
+/// merge by hand, without GANG's hooks (R33).
+fn incoming_markers(repo: &Repo, before: &str) -> Result<()> {
+    let changed = gang_core::repo::split_nul(&repo.run([
+        "diff",
+        "--name-only",
+        "-z",
+        "--diff-filter=AM",
+        before,
+        "HEAD",
+    ])?);
+    let paths: Vec<&str> = changed
+        .iter()
+        .map(String::as_str)
+        .filter(|p| gang_core::attributes::breaks_with_markers(p))
+        .collect();
+    if paths.is_empty() {
+        return Ok(());
+    }
+    for path in gang_core::guards::with_markers(repo, Some("HEAD"), &paths)? {
+        let by = repo
+            .try_run([
+                "log",
+                "-1",
+                "--format=%h by %an",
+                "-S",
+                "<<<<<<< ",
+                &format!("{before}..HEAD"),
+                "--",
+                &path,
+            ])?
+            .map(|l| l.trim().to_owned())
+            .filter(|l| !l.is_empty())
+            .map(|l| format!(" ({l})"))
+            .unwrap_or_default();
+        ui::warn(format!(
+            "{path} came in with conflict markers{by}: {}",
+            if gang_core::attributes::is_code(&path) {
+                "the scripts will not compile until they are removed"
+            } else {
+                "Unity cannot open it until they are removed"
+            }
+        ));
+    }
+    Ok(())
 }
 
 /// One side deleted an asset the other side's work uses (R29): git merged
