@@ -74,6 +74,9 @@ pub struct UnlockArgs {
     /// Release someone else's lock (the team is told)
     #[arg(long)]
     force: bool,
+    /// Release even files with changes that are not pushed yet
+    #[arg(long, short)]
+    yes: bool,
 }
 
 /// Show the team's locks
@@ -786,7 +789,7 @@ fn refresh(repo: &Repo, me: &str, prefix: &str, text: &str) -> Result<i32> {
 
 pub fn unlock(invocation: &Invocation) -> Result<i32> {
     let args: UnlockArgs = parse("gang unlock", invocation);
-    let (repo, _config, me) = context(invocation)?;
+    let (repo, config, me) = context(invocation)?;
     let prefix = prefix(invocation);
     let mut expander = Expander::new(&repo);
     let mut wanted: Vec<(String, Option<Target>)> = Vec::new();
@@ -802,6 +805,31 @@ pub fn unlock(invocation: &Invocation) -> Result<i32> {
     }
     if wanted.is_empty() && !args.all {
         bail!("say what to unlock, or use --all");
+    }
+    // A binary file's lock matters most while its changes are not on the
+    // server yet: released now, someone else's edit cannot be merged (A7).
+    if !args.yes {
+        let upstream = presence::upstream(&repo, &config)?;
+        let flags = presence::compute_flags(&repo, upstream.as_deref())?;
+        let at_risk: Vec<&String> = flags
+            .keys()
+            .filter(|path| attributes::is_binary_path(path))
+            .filter(|path| {
+                wanted.iter().any(|(_, t)| t.as_ref().is_some_and(|t| t.covers_file(path)))
+            })
+            .collect();
+        if !at_risk.is_empty() {
+            println!("These locked files have changes that are not pushed yet:");
+            for path in &at_risk {
+                println!("    {path}");
+            }
+            println!("Once unlocked, a teammate's edit to them cannot be merged with yours.");
+            let release = ui::interactive() && ui::confirm("Release the lock anyway?", false)?;
+            if !release {
+                ui::hint("Push first (gang sync), or release anyway with --yes.");
+                return Ok(1);
+            }
+        }
     }
     let force = args.force;
     let all = args.all;

@@ -421,6 +421,9 @@ fn bake_outputs_need_a_bake_lock() {
         Some(0)
     );
 
+    // The bake is not pushed yet: releasing it asks first (field test A7).
+    assert_eq!(team.gang("bob", &["unlock", SCENE, "--bake"]).code, Some(1));
+    assert_eq!(team.gang("bob", &["sync"]).code, Some(0));
     assert_eq!(team.gang("bob", &["unlock", SCENE, "--bake"]).code, Some(0));
 }
 
@@ -468,4 +471,27 @@ fn a_refused_save_leaves_the_index_alone() {
         changed.stdout.contains("Assets/Art/Notes.txt"),
         "{changed:?}"
     );
+}
+
+/// Field test A7: releasing a binary file with unpushed changes warns.
+#[test]
+fn unlocking_unpushed_binary_work_asks_first() {
+    let team = Team::new(&["alice"]);
+    let texture = "Assets/Art/Brick.png";
+    team.write("alice", texture, "png");
+    team.write(
+        "alice",
+        &format!("{texture}.meta"),
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000b00c\n",
+    );
+    assert_eq!(team.gang("alice", &["save", "-m", "brick"]).code, Some(0));
+    assert_eq!(team.gang("alice", &["lock", texture]).code, Some(0));
+    team.write("alice", texture, "png, repainted");
+    assert_eq!(team.gang("alice", &["save", "-m", "repaint"]).code, Some(0));
+
+    let unlock = team.gang("alice", &["unlock", texture]);
+    assert_eq!(unlock.code, Some(1), "{unlock:?}");
+    assert!(unlock.stdout.contains("not pushed yet"), "{unlock:?}");
+    assert!(team.gang("alice", &["locks"]).stdout.contains("Brick.png"));
+    assert_eq!(team.gang("alice", &["unlock", texture, "--yes"]).code, Some(0));
 }
