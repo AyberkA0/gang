@@ -69,7 +69,25 @@ pub fn run(repo: &Repo) -> Result<Vec<Check>> {
             true,
         ));
     }
-    if git::lfs_version().is_none() {
+    let config = crate::config::Config::load(repo.root()).unwrap_or_default();
+    let lfs = crate::config::lfs_enabled(repo.root(), &config);
+    if !lfs && git::lfs_version().is_some() {
+        let pointers = repo.try_run(["lfs", "ls-files", "-n"])?.unwrap_or_default();
+        let count = pointers.lines().filter(|l| !l.trim().is_empty()).count();
+        if count > 0 {
+            checks.push(check(
+                Level::Warn,
+                "setup",
+                format!(
+                    "Git LFS is off ([lfs] enabled = false), but {count} file{} in this branch stored in LFS",
+                    if count == 1 { " is" } else { "s are" }
+                ),
+                Some("set [lfs] enabled = true, or move them out of LFS with `git lfs migrate export`"),
+                false,
+            ));
+        }
+    }
+    if lfs && git::lfs_version().is_none() {
         checks.push(check(
             Level::Warn,
             "setup",

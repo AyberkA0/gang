@@ -49,6 +49,10 @@ struct Team {
 
 impl Team {
     fn new() -> Team {
+        Team::with(&["alice", "bob"])
+    }
+
+    fn with(users: &[&str]) -> Team {
         let sandbox = Sandbox::empty();
         sandbox.unity_project("");
         sandbox.write(SCENE, &scene("0", "2.5", ""));
@@ -78,7 +82,7 @@ impl Team {
         let remote = sandbox.dir.path().join("remote.git");
         sandbox.git(&["clone", "-q", "--bare", ".", remote.to_str().unwrap()]);
         let url = format!("file://{}", remote.to_string_lossy().replace('\\', "/"));
-        for user in ["alice", "bob"] {
+        for user in users {
             let clone = sandbox.run_in("", GANG, &["clone", "-q", &url, user]);
             assert_eq!(clone.code, Some(0), "{clone:?}");
             sandbox.run_in(user, "git", &["config", "gang.user", user]);
@@ -312,4 +316,135 @@ fn gang_core_layer_names(text: &str) -> Vec<String> {
         .take_while(|l| l.starts_with("  -"))
         .map(|l| l.trim_start_matches("  -").trim().to_owned())
         .collect()
+}
+
+fn object_on_layer(id: u32, name: &str, layer: u32) -> String {
+    format!(
+        "--- !u!1 &{id}
+GameObject:
+  m_Component:
+  - component: {{fileID: {}}}
+  m_Layer: {layer}
+  m_Name: {name}
+--- !u!4 &{}
+Transform:
+  m_GameObject: {{fileID: {id}}}
+  m_Children: []
+  m_Father: {{fileID: 0}}
+",
+        id + 1,
+        id + 1
+    )
+}
+
+fn base_tags(team: &Team, users: &[&str], extra: Option<&str>) -> Vec<&'static str> {
+    let mut layers = vec![
+        "Default",
+        "TransparentFX",
+        "Ignore Raycast",
+        "",
+        "Water",
+        "UI",
+        "",
+        "",
+        "",
+    ];
+    if let Some(extra) = extra {
+        layers[8] = Box::leak(extra.to_owned().into_boxed_str());
+    }
+    for user in users {
+        team.write(
+            user,
+            "ProjectSettings/TagManager.asset",
+            &tag_manager(&layers),
+        );
+    }
+    layers
+}
+
+/// Both renamed the same, already used layer: that is one layer with two
+/// names, not two layers, so nothing may move.
+#[test]
+fn renaming_the_same_layer_twice_does_not_split_it() {
+    let team = Team::new();
+    base_tags(&team, &["alice", "bob"], Some("Enemy"));
+    team.write(
+        "alice",
+        SCENE,
+        &scene("0", "2.5", &object_on_layer(500, "Imp", 8)),
+    );
+    assert_eq!(team.sync("alice", "enemy layer").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    let mut alice = base_tags(&team, &[], Some("Enemies"));
+    alice.truncate(9);
+    team.write(
+        "alice",
+        "ProjectSettings/TagManager.asset",
+        &tag_manager(&alice),
+    );
+    assert_eq!(team.sync("alice", "rename").code, Some(0));
+
+    let bob = base_tags(&team, &[], Some("Foes"));
+    team.write(
+        "bob",
+        "ProjectSettings/TagManager.asset",
+        &tag_manager(&bob),
+    );
+    let scene_text = team.read("bob", SCENE) + &object_on_layer(600, "Zombie", 8);
+    team.write("bob", SCENE, &scene_text);
+    let sync = team.sync("bob", "rename too");
+    assert!(
+        !sync.stdout.contains("Moving \"Foes\""),
+        "the layer was split in two: {sync:?}"
+    );
+    // Imp and Zombie must still share one layer.
+    let text = team.read("bob", SCENE);
+    assert!(!text.contains("m_Layer: 9"), "{text}");
+}
+
+/// A layer that was already shared (here on a branch) moves: teammates who
+/// started using it before the move must have their new work moved too.
+#[test]
+fn a_moved_layer_follows_teammates_work_in_progress() {
+    let team = Team::with(&["alice", "bob", "carol"]);
+    base_tags(&team, &["alice", "bob", "carol"], None);
+    assert_eq!(team.sync("alice", "tags").code, Some(0));
+    for user in ["bob", "carol"] {
+        assert_eq!(team.sync(user, "-").code, Some(0));
+    }
+    // Bob shares UI3D = 8 on a branch; Carol picks the branch up.
+    team.gang("bob", &["switch", "-c", "menu"]);
+    base_tags(&team, &["bob"], Some("UI3D"));
+    assert_eq!(team.gang("bob", &["save", "-m", "UI3D"]).code, Some(0));
+    assert_eq!(
+        team.gang("bob", &["push", "-u", "origin", "menu"]).code,
+        Some(0)
+    );
+    team.gang("carol", &["fetch"]);
+    assert_eq!(team.gang("carol", &["switch", "menu"]).code, Some(0));
+    let carol_scene = team.read("carol", SCENE) + &object_on_layer(700, "MenuPanel", 8);
+    team.write("carol", SCENE, &carol_scene);
+    assert_eq!(
+        team.gang("carol", &["save", "-m", "menu panel"]).code,
+        Some(0)
+    );
+
+    // Meanwhile Pickup = 8 lands on main; Bob merges main into the branch.
+    base_tags(&team, &["alice"], Some("Pickup"));
+    assert_eq!(team.sync("alice", "Pickup").code, Some(0));
+    team.gang("bob", &["fetch"]);
+    let merge = team.gang("bob", &["merge", "origin/main", "-m", "main"]);
+    assert_eq!(merge.code, Some(0), "{merge:?}");
+    assert_eq!(team.gang("bob", &["push"]).code, Some(0));
+
+    // Carol syncs: her MenuPanel must end up on UI3D (9), not on Pickup (8).
+    let sync = team.sync("carol", "-");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    let text = team.read("carol", SCENE);
+    let panel = text.split("m_Name: MenuPanel").next().unwrap();
+    assert!(
+        panel.trim_end().ends_with("m_Layer: 9"),
+        "MenuPanel silently moved to Pickup: {text}"
+    );
 }

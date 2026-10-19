@@ -233,7 +233,8 @@ fn after_clone(repo: &Repo) -> Result<()> {
             ui::done(step);
         }
     }
-    if git::lfs_version().is_some() {
+    let config = gang_core::config::Config::load(repo.root()).unwrap_or_default();
+    if gang_core::config::lfs_enabled(repo.root(), &config) && git::lfs_version().is_some() {
         repo.run(["lfs", "pull"])?;
         ui::done("LFS files downloaded");
     }

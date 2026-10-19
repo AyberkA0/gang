@@ -149,11 +149,37 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
             || stderr.contains("non-fast-forward");
         if !rejected || attempt == 2 {
             eprint!("{stderr}");
+            push_failed(&stderr, outgoing);
             return Ok(output.status.code().unwrap_or(1));
         }
         println!("Someone pushed in the meantime; merging their work too…");
     }
     Ok(1)
+}
+
+/// What a failed push means for the user, after git's own message.
+fn push_failed(stderr: &str, outgoing: usize) {
+    eprintln!();
+    eprintln!(
+        "✗ Push failed. Your {outgoing} commit{} {} safe in this clone; nothing was lost.",
+        if outgoing == 1 { "" } else { "s" },
+        if outgoing == 1 { "is" } else { "are" }
+    );
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("lfs")
+        && ["budget", "quota", "exceeded"]
+            .iter()
+            .any(|w| lower.contains(w))
+    {
+        ui::hint(
+            "GitHub refused the Git LFS upload: the LFS storage or bandwidth quota is used up.",
+        );
+        ui::hint("Either raise the LFS budget on GitHub, or stop using LFS for this project:");
+        ui::hint("set [lfs] enabled = false in .gang/config.toml and run `gang ignore update`.");
+        ui::hint("Commits that already contain LFS files still need them moved out of LFS first.");
+    } else {
+        ui::hint("Fix the problem above, then run `gang sync` again.");
+    }
 }
 
 /// Passes that run before merging (DESIGN.md §14.2): the layer remap.

@@ -244,3 +244,58 @@ fn plain_git_clone_gets_set_up_by_the_next_gang_command() {
     let driver = sandbox.run_in("teammate", "git", &["config", "--get", "merge.gang.driver"]);
     assert!(driver.stdout.contains("merge-driver unity"));
 }
+
+#[test]
+fn new_projects_keep_binaries_out_of_lfs() {
+    let sandbox = init_unity_repo();
+    assert!(
+        sandbox
+            .read(".gang/config.toml")
+            .contains("[lfs]\n# Store images")
+    );
+    let attributes = sandbox.read(".gitattributes");
+    assert!(!attributes.contains("filter=lfs"), "{attributes}");
+    assert!(
+        attributes.contains("*.[pP][nN][gG] binary\n"),
+        "{attributes}"
+    );
+    assert!(
+        sandbox
+            .run("git", &["config", "--get", "filter.lfs.process"])
+            .stdout
+            .is_empty(),
+        "LFS should not be installed in the clone"
+    );
+
+    // Turning it on and regenerating sends binaries to LFS.
+    assert_eq!(
+        sandbox
+            .run(GANG, &["config", "--project", "lfs.enabled", "true"])
+            .code,
+        Some(0)
+    );
+    assert_eq!(sandbox.run(GANG, &["ignore", "update"]).code, Some(0));
+    assert!(
+        sandbox
+            .read(".gitattributes")
+            .contains("*.[pP][nN][gG] filter=lfs diff=lfs merge=lfs -text\n")
+    );
+}
+
+#[test]
+fn projects_set_up_with_lfs_keep_it() {
+    let sandbox = init_unity_repo();
+    // An older project: LFS rules in .gitattributes, no [lfs] setting.
+    assert_eq!(
+        sandbox
+            .run(GANG, &["config", "--project", "lfs.enabled", "true"])
+            .code,
+        Some(0)
+    );
+    assert_eq!(sandbox.run(GANG, &["ignore", "update"]).code, Some(0));
+    let config = sandbox.read(".gang/config.toml");
+    let start = config.find("[lfs]").unwrap();
+    sandbox.write(".gang/config.toml", &config[..start]);
+    assert_eq!(sandbox.run(GANG, &["ignore", "update"]).code, Some(0));
+    assert!(sandbox.read(".gitattributes").contains("filter=lfs"));
+}

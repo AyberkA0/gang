@@ -36,6 +36,11 @@ auto_remap = true
 [sync]
 strategy = "merge"
 editor_open = "block"
+
+[lfs]
+# Store images, models, audio and other large binaries in Git LFS.
+# GitHub's LFS storage is paid and has a quota; off keeps GANG free.
+enabled = false
 "#;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -48,6 +53,7 @@ pub struct Config {
     pub merge: MergeConfig,
     pub layers: LayersConfig,
     pub sync: SyncConfig,
+    pub lfs: LfsConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -166,6 +172,25 @@ impl Default for SyncConfig {
             editor_open: "block".into(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LfsConfig {
+    /// `None` when the setting is missing: projects set up before the
+    /// setting existed keep what their `.gitattributes` already does.
+    pub enabled: Option<bool>,
+}
+
+/// Whether the project stores large binaries in Git LFS: the `[lfs]`
+/// setting, or for older projects without it, whether the managed
+/// `.gitattributes` already sends files to LFS.
+pub fn lfs_enabled(repo_root: &Path, config: &Config) -> bool {
+    config.lfs.enabled.unwrap_or_else(|| {
+        std::fs::read_to_string(repo_root.join(".gitattributes"))
+            .map(|text| text.lines().any(|l| l.contains("filter=lfs")))
+            .unwrap_or(false)
+    })
 }
 
 impl Config {

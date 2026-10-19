@@ -37,7 +37,8 @@ pub const UNITY_YAML: &[&str] = &[
 
 const CODE: &[&str] = &["cs", "shader", "hlsl", "cginc", "compute", "uss", "uxml"];
 
-/// File types stored in Git LFS.
+/// Binary file types: stored in Git LFS when the project uses it, marked
+/// binary otherwise. Neither can be merged.
 const LFS: &[&str] = &[
     // Images
     "psd",
@@ -94,6 +95,7 @@ const LFS: &[&str] = &[
 const LFS_FILES: &[&str] = &["**/LightingData.asset"];
 
 const LFS_ATTRS: &str = "filter=lfs diff=lfs merge=lfs -text";
+const BINARY_ATTRS: &str = "binary";
 
 /// `psd` → `*.[pP][sS][dD]`, so `HERO.PSD` matches on every OS.
 fn any_case_extension(extension: &str) -> String {
@@ -111,8 +113,8 @@ fn any_case_extension(extension: &str) -> String {
     pattern
 }
 
-/// Whether the path is stored in Git LFS by the managed rules (and so cannot
-/// be merged).
+/// Whether the path is a binary type in the managed rules (and so cannot be
+/// merged), whether or not the project stores it in Git LFS.
 pub fn is_binary_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     if name == "LightingData.asset" {
@@ -128,8 +130,9 @@ pub fn is_unity_yaml(path: &str) -> bool {
     extension.is_some_and(|e| UNITY_YAML.contains(&e))
 }
 
-/// The generated block.
-pub fn block() -> String {
+/// The generated block. With `lfs`, binaries go to Git LFS; without it they
+/// stay plain git files marked binary, so git never treats them as text.
+pub fn block(lfs: bool) -> String {
     let unity = UNITY_YAML
         .iter()
         .map(|ext| format!("*.{ext} merge=gang"))
@@ -147,10 +150,18 @@ pub fn block() -> String {
         "**/Packages/manifest.json merge=gang-json".to_owned(),
         "**/Packages/packages-lock.json merge=gang-json".to_owned(),
     ];
-    let lfs = LFS
+    let (title, attrs) = if lfs {
+        ("Large binary files (Git LFS)", LFS_ATTRS)
+    } else {
+        (
+            "Binary files (Git LFS is off: [lfs] enabled = false)",
+            BINARY_ATTRS,
+        )
+    };
+    let binaries = LFS
         .iter()
-        .map(|ext| format!("{} {LFS_ATTRS}", any_case_extension(ext)))
-        .chain(LFS_FILES.iter().map(|file| format!("{file} {LFS_ATTRS}")))
+        .map(|ext| format!("{} {attrs}", any_case_extension(ext)))
+        .chain(LFS_FILES.iter().map(|file| format!("{file} {attrs}")))
         .collect();
 
     managed::block(
@@ -161,15 +172,15 @@ pub fn block() -> String {
             ("Unity YAML (semantic merge)", unity),
             ("Code", code),
             ("Files GANG merges specially", gang),
-            ("Large binary files (Git LFS)", lfs),
+            (title, binaries),
         ],
     )
 }
 
 /// The new `.gitattributes` text: the generated block, plus the existing lines
 /// the block does not already contain.
-pub fn regenerate(existing: &str) -> String {
-    let block = block();
+pub fn regenerate(existing: &str, lfs: bool) -> String {
+    let block = block(lfs);
     let current = ManagedFile::parse(existing);
     let rules = current
         .rules
@@ -196,7 +207,7 @@ mod tests {
 
     #[test]
     fn lighting_data_is_lfs_after_the_asset_merge_rule() {
-        let block = block();
+        let block = block(true);
         let asset = block.find("*.asset merge=gang").unwrap();
         let lighting = block.find("**/LightingData.asset filter=lfs").unwrap();
         assert!(asset < lighting, "later lines override earlier ones");
@@ -204,10 +215,21 @@ mod tests {
 
     #[test]
     fn regenerate_keeps_custom_lines_once() {
-        let first = regenerate("*.psd filter=lfs diff=lfs merge=lfs -text\n*.txt text\n");
+        let first = regenerate(
+            "*.psd filter=lfs diff=lfs merge=lfs -text\n*.txt text\n",
+            true,
+        );
         assert!(first.ends_with(
             "# Project rules — kept sorted\n*.psd filter=lfs diff=lfs merge=lfs -text\n*.txt text\n"
         ));
-        assert_eq!(regenerate(&first), first);
+        assert_eq!(regenerate(&first, true), first);
+    }
+
+    #[test]
+    fn without_lfs_binaries_are_marked_binary() {
+        let block = block(false);
+        assert!(!block.contains("filter=lfs"), "{block}");
+        assert!(block.contains("*.[pP][nN][gG] binary"), "{block}");
+        assert!(block.contains("**/LightingData.asset binary"), "{block}");
     }
 }

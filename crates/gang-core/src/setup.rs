@@ -57,7 +57,8 @@ pub fn write_managed_files(repo: &Repo, projects: &[UnityProject]) -> Result<Vec
 
     let gitattributes = root.join(".gitattributes");
     let existing = read_or_empty(&gitattributes)?;
-    let updated = attributes::regenerate(&existing);
+    let config = config::Config::load(root).unwrap_or_default();
+    let updated = attributes::regenerate(&existing, config::lfs_enabled(root, &config));
     if write_if_changed(&gitattributes, &existing, &updated)? {
         changed.push(".gitattributes".to_owned());
     }
@@ -88,7 +89,8 @@ fn write_if_changed(path: &Path, old: &str, new: &str) -> Result<bool> {
 }
 
 /// Registers the merge drivers and hooks in the repository's own config and
-/// hooks folder, and Git LFS when it is installed. Returns what was done.
+/// hooks folder, and Git LFS when the project uses it and it is installed.
+/// Returns what was done.
 pub fn install(repo: &Repo) -> Result<Vec<String>> {
     let gang = gang_command()?;
     let mut done = Vec::new();
@@ -137,7 +139,10 @@ pub fn install(repo: &Repo) -> Result<Vec<String>> {
     }
     done.push(format!("hooks installed ({})", HOOKS.join(", ")));
 
-    if git::lfs_version().is_some() {
+    let config = config::Config::load(repo.root()).unwrap_or_default();
+    if !config::lfs_enabled(repo.root(), &config) {
+        // Nothing to do: binaries are plain git files ([lfs] enabled = false).
+    } else if git::lfs_version().is_some() {
         repo.run(["lfs", "install", "--local", "--skip-repo"])?;
         done.push("Git LFS enabled".to_owned());
     } else {
@@ -220,10 +225,11 @@ fn hook_script(name: &str, gang: &str) -> String {
         } else {
             "  echo \"Git LFS is not installed; large files stay as pointers. Install it from https://git-lfs.com\" >&2\n"
         };
+        // Missing LFS only matters to projects that use it.
         format!(
             "if command -v git-lfs >/dev/null 2>&1; then\n\
              \x20 {feed}git lfs {name} \"$@\" || exit $?\n\
-             else\n\
+             elif grep -qs filter=lfs .gitattributes; then\n\
              {missing}\
              fi\n"
         )

@@ -482,15 +482,21 @@ fn check_sizes(repo: &Repo, changes: &[Change], findings: &mut Vec<Finding>) -> 
                     size / 1024 / 1024
                 ),
                 Some(
-                    "track its type with Git LFS (add it to .gitattributes), then add it again"
+                    "keep it out of git, or turn on Git LFS ([lfs] enabled = true in .gang/config.toml; GitHub's LFS storage is paid)"
                         .to_owned(),
                 ),
             ));
         } else if size > WARN_SIZE {
             findings.push(Finding::warn(
                 path,
-                format!("is {} MB and not in Git LFS", size / 1024 / 1024),
-                Some("consider tracking its type with Git LFS".to_owned()),
+                format!(
+                    "is {} MB; GitHub warns about files over 50 MB and rejects them over 100 MB",
+                    size / 1024 / 1024
+                ),
+                Some(
+                    "keep large source files (raw audio, video, PSDs) out of git if you can"
+                        .to_owned(),
+                ),
             ));
         }
     }
