@@ -91,7 +91,11 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
     if files.is_empty() && others.is_empty() {
         println!("No conflicts to resolve.");
         // Answers applied, but the merge (or rebase…) never finished.
-        return if args.list { Ok(0) } else { finish_operation(repo) };
+        return if args.list {
+            Ok(0)
+        } else {
+            finish_operation(repo)
+        };
     }
     let mut rerere = load_rerere(repo);
     if args.reset {

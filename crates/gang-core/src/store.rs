@@ -252,6 +252,19 @@ pub fn driver_merge(
     rules: &Rules,
     theirs_name: &str,
 ) -> Option<(String, bool)> {
+    // Both created the same folder: two .meta files that differ only in the
+    // GUID. Keep the one already shared (the upstream side) without asking;
+    // nothing refers to a folder by GUID in practice (field test C1).
+    let folder_meta = |text: &str| text.contains("folderAsset: yes");
+    if path.ends_with(".meta") && base.trim().is_empty() && folder_meta(ours) && folder_meta(theirs)
+    {
+        let git_dir = repo.git_dir();
+        let rebasing =
+            git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists();
+        let upstream = if rebasing { ours } else { theirs };
+        let _ = clear(repo, path);
+        return Some((upstream.to_owned(), false));
+    }
     let guids = crate::semantic::guid_index(repo);
     let outcome = merge_texts(
         format,

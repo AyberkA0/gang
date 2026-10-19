@@ -509,11 +509,26 @@ fn an_unfinished_merge_is_not_published_as_own_work() {
     team.write("bob", SCENE, &scene("0", "4", ""));
     assert_eq!(team.sync("bob", "bob jump").code, Some(1));
 
-    assert_eq!(team.gang("bob", &["presence-publish", "--force"]).code, Some(0));
+    assert_eq!(
+        team.gang("bob", &["presence-publish", "--force"]).code,
+        Some(0)
+    );
     let who = team.gang("alice", &["--json", "who"]);
-    let bob = who.stdout.split("\"user\":").find(|p| p.contains("\"bob\"")).unwrap_or("");
-    assert!(bob.contains(SCENE), "bob did change the scene: {}", who.stdout);
-    assert!(!bob.contains(new_script), "Alice's file shown as Bob's: {}", who.stdout);
+    let bob = who
+        .stdout
+        .split("\"user\":")
+        .find(|p| p.contains("\"bob\""))
+        .unwrap_or("");
+    assert!(
+        bob.contains(SCENE),
+        "bob did change the scene: {}",
+        who.stdout
+    );
+    assert!(
+        !bob.contains(new_script),
+        "Alice's file shown as Bob's: {}",
+        who.stdout
+    );
 }
 
 /// Field test A9: conflicts answered, merge commit never made. The next
@@ -528,12 +543,17 @@ fn sync_finishes_a_merge_left_open() {
     // Answered by hand and staged, but not committed.
     team.write("bob", SCENE, &scene("0", "3", ""));
     team.sandbox.run_in("bob", "git", &["add", SCENE]);
-    assert_eq!(team.gang("bob", &["bang", "--list"]).stdout, "No conflicts to resolve.\n");
+    assert_eq!(
+        team.gang("bob", &["bang", "--list"]).stdout,
+        "No conflicts to resolve.\n"
+    );
 
     let sync = team.gang("bob", &["sync"]);
     assert_eq!(sync.code, Some(0), "{sync:?}");
     assert!(sync.stdout.contains("Finished the merge"), "{sync:?}");
-    let log = team.sandbox.run_in("bob", "git", &["log", "-1", "--format=%s"]);
+    let log = team
+        .sandbox
+        .run_in("bob", "git", &["log", "-1", "--format=%s"]);
     assert!(log.stdout.starts_with("Merge"), "{log:?}");
 }
 
@@ -547,7 +567,10 @@ fn an_untracked_file_does_not_stop_sync() {
     let sync = team.gang("bob", &["sync"]);
     assert_eq!(sync.code, Some(0), "{sync:?}");
     assert_eq!(team.read("bob", SCENE), scene("1", "2.5", ""));
-    assert!(team.read("bob", "Assets/Scripts/Draft.cs").contains("Draft"));
+    assert!(
+        team.read("bob", "Assets/Scripts/Draft.cs")
+            .contains("Draft")
+    );
 }
 
 /// Field test A6: an empty folder's .meta only warns its author, so it must
@@ -570,4 +593,32 @@ fn an_empty_folder_meta_does_not_block_the_merge() {
     let bang = team.gang("bob", &["bang", "--prefer", "theirs"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert!(!bang.stderr.contains("has no asset"), "{bang:?}");
+}
+
+/// Field test C1: both created the same folder. Its two .meta files differ
+/// only in the GUID; the shared one is kept without a question.
+#[test]
+fn both_created_the_same_folder() {
+    let team = Team::new();
+    for (user, guid, file) in [("alice", "aa", "A"), ("bob", "bb", "B")] {
+        team.write(
+            user,
+            "Assets/Audio.meta",
+            &format!("fileFormatVersion: 2\nguid: {guid:0>32}\nfolderAsset: yes\n"),
+        );
+        std::fs::create_dir_all(team.sandbox.dir.path().join(user).join("Assets/Audio")).unwrap();
+        team.write(user, &format!("Assets/Audio/{file}.txt"), "x\n");
+        team.write(
+            user,
+            &format!("Assets/Audio/{file}.txt.meta"),
+            &format!("fileFormatVersion: 2\nguid: {:0>32}\n", format!("{guid}1")),
+        );
+    }
+    assert_eq!(team.sync("alice", "audio").code, Some(0));
+    let sync = team.sync("bob", "audio too");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        team.read("bob", "Assets/Audio.meta")
+            .contains(&format!("{:0>32}", "aa"))
+    );
 }

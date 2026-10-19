@@ -54,7 +54,10 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
     } else {
         "--untracked-files=no"
     };
-    let dirty = !repo.run(["status", "--porcelain", untracked])?.trim().is_empty();
+    let dirty = !repo
+        .run(["status", "--porcelain", untracked])?
+        .trim()
+        .is_empty();
     if dirty {
         let save = args.message.is_some()
             || (ui::interactive()
