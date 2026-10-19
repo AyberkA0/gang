@@ -168,6 +168,9 @@ pub fn block(lfs: bool) -> String {
         "**/ProjectSettings/ProjectVersion.txt merge=gang".to_owned(),
         "**/Packages/manifest.json merge=gang-json".to_owned(),
         "**/Packages/packages-lock.json merge=gang-json".to_owned(),
+        "*.asmdef merge=gang-json".to_owned(),
+        "*.asmref merge=gang-json".to_owned(),
+        "*.inputactions merge=gang-json".to_owned(),
     ];
     let (title, attrs) = if lfs {
         ("Large binary files (Git LFS)", LFS_ATTRS)

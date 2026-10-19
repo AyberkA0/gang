@@ -230,6 +230,12 @@ impl Config {
 
     pub fn parse(text: &str) -> Result<Config> {
         let config: Config = toml::from_str(text)?;
+        if config.merge.ui_order_conflicts != "ask" {
+            bail!(
+                "[merge] ui_order_conflicts = {:?}: only \"ask\" is possible; GANG asks every conflict on its own",
+                config.merge.ui_order_conflicts
+            );
+        }
         for (pattern, policy) in &config.scenes.policy {
             if !matches!(policy.as_str(), "lock-required" | "merge") {
                 bail!(
@@ -324,9 +330,12 @@ mod tests {
         assert!(!scenes.lock_required("Assets/Scenes/Levels/Level1.unity"));
         assert!(scenes.lock_required("Assets/Scenes/Levels/Boss.unity"));
         assert!(!scenes.lock_required("Assets/Prefabs/Hero.prefab"));
-        let wrong = Config::parse("[scenes.policy]
+        let wrong = Config::parse(
+            "[scenes.policy]
 \"Assets/*\" = \"locked\"
-").unwrap_err();
+",
+        )
+        .unwrap_err();
         assert!(format!("{wrong:#}").contains("use \"lock-required\" or \"merge\""));
     }
 

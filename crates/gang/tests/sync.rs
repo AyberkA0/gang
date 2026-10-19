@@ -1818,3 +1818,69 @@ fn conflict_markers_that_come_in_are_reported() {
         "{doctor:?}"
     );
 }
+
+/// Thought experiment R36: two people add a reference to the same assembly
+/// definition. git saw two edits of the line before (its new comma) and
+/// stopped; the JSON driver keeps both references, with Unity's indent.
+#[test]
+fn references_added_to_one_asmdef_on_both_sides_merge() {
+    let team = Team::new();
+    let asmdef =
+        "{\n    \"name\": \"Game\",\n    \"references\": [\n        \"GUID:aaaa\"\n    ]\n}\n";
+    team.write("alice", "Assets/Game.asmdef", asmdef);
+    team.write(
+        "alice",
+        "Assets/Game.asmdef.meta",
+        "fileFormatVersion: 2\nguid: a1b2c3d4e5f60718293a4b5c6d7e8f90\n",
+    );
+    let first = team.sync("alice", "game assembly");
+    assert_eq!(first.code, Some(0), "{first:?}");
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    team.write(
+        "alice",
+        "Assets/Game.asmdef",
+        &asmdef.replace("\"GUID:aaaa\"", "\"GUID:aaaa\",\n        \"GUID:bbbb\""),
+    );
+    assert_eq!(team.sync("alice", "input system").code, Some(0));
+    team.write(
+        "bob",
+        "Assets/Game.asmdef",
+        &asmdef.replace("\"GUID:aaaa\"", "\"GUID:aaaa\",\n        \"GUID:cccc\""),
+    );
+    let sync = team.sync("bob", "cinemachine");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert_eq!(
+        team.read("bob", "Assets/Game.asmdef"),
+        "{\n    \"name\": \"Game\",\n    \"references\": [\n        \"GUID:aaaa\",\n        \"GUID:cccc\",\n        \"GUID:bbbb\"\n    ]\n}\n"
+    );
+}
+
+/// R37: a repository set up by an older GANG keeps its old `.gitattributes`
+/// (no assembly definition rule) until someone notices; gang doctor does.
+#[test]
+fn doctor_notices_managed_files_an_older_gang_wrote() {
+    let team = Team::new();
+    let attributes = team.read("alice", ".gitattributes");
+    let fresh = team.gang("alice", &["doctor"]);
+    assert!(!fresh.stdout.contains("differs from what this GANG writes"), "{fresh:?}");
+    team.write(
+        "alice",
+        ".gitattributes",
+        &attributes.replace("*.asmdef merge=gang-json\n", ""),
+    );
+    let doctor = team.gang("alice", &["doctor"]);
+    assert!(
+        doctor
+            .stdout
+            .contains(".gitattributes differs from what this GANG writes"),
+        "{doctor:?}"
+    );
+    let fix = team.gang("alice", &["doctor", "--fix"]);
+    assert!(
+        fix.stdout
+            .contains("rewrote GANG's block in .gitattributes"),
+        "{fix:?}"
+    );
+    assert_eq!(team.read("alice", ".gitattributes"), attributes);
+}

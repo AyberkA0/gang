@@ -690,7 +690,7 @@ The schema (which `(class, path)` has which kind, which fields form coupled grou
 Identity lists are merged with a 3-way diff over element identities: both sides' additions are kept, both sides' removals applied. Ordering:
 
 - Outside a Canvas subtree: our order, with their insertions placed after their predecessor.
-- Inside a Canvas subtree (sibling order is draw order): conflicting orders are a **conflict** (`merge.ui_order_conflicts = "ask"`).
+- Inside a Canvas subtree (sibling order is draw order): conflicting orders are a **conflict** (`merge.ui_order_conflicts = "ask"`, the only value: every conflict is asked on its own, §15.3).
 
 ### 13.6 Graph validation and repair
 
@@ -824,6 +824,8 @@ Known gaps (see [HARDENING.md](HARDENING.md) §1.1): collision matrices are not 
 
 - `Packages/manifest.json`: key-wise JSON merge (`dependencies` by package name, `scopedRegistries` by name). Same package, different versions → question.
 - `Packages/packages-lock.json`: rebuilt from the merged manifest's choices; entries for packages chosen from one side are taken from that side.
+- Assembly definitions (`*.asmdef`, `*.asmref`) and Input System assets (`*.inputactions`) go through the same JSON merge. Arrays merge item by item (diff3): two references added to one assembly on both sides are both kept, where git saw two edits of the line before them (its new comma) and stopped; the same item changed differently on both sides is still a question. The merged file keeps its own indentation (Unity writes assembly definitions with four spaces, the manifest with two).
+- `gang doctor` notices when `.gitattributes` or `.gitignore` differ from what the running GANG writes (a newer GANG with new rules such as these, or a newly detected folder to ignore); `gang doctor --fix` rewrites GANG's block and keeps the project's own rules (HARDENING R37).
 
 ### 14.4 Other project settings
 
@@ -1056,6 +1058,8 @@ Managed the same way (block + project rules):
 *.cs     text eol=lf diff=csharp
 .gitignore     text eol=lf merge=gang-ignore
 .gitattributes text eol=lf merge=gang-ignore
+**/Packages/manifest.json merge=gang-json
+*.asmdef merge=gang-json
 **/LightingData.asset filter=lfs diff=lfs merge=lfs -text
 *.psd filter=lfs diff=lfs merge=lfs -text
 *.png filter=lfs diff=lfs merge=lfs -text

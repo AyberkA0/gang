@@ -69,6 +69,17 @@ pub fn run(repo: &Repo) -> Result<Vec<Check>> {
             true,
         ));
     }
+    if setup::is_gang_repo(repo) {
+        for name in setup::outdated_managed_files(repo, &projects).unwrap_or_default() {
+            checks.push(check(
+                Level::Warn,
+                "managed files",
+                format!("{name} differs from what this GANG writes (new merge rules or a newly detected folder)"),
+                Some("gang doctor --fix rewrites GANG's block and keeps your own rules; commit it for the team"),
+                true,
+            ));
+        }
+    }
     let config = crate::config::Config::load(repo.root()).unwrap_or_default();
     let lfs = crate::config::lfs_enabled(repo.root(), &config);
     if !lfs && git::lfs_version().is_some() {
@@ -786,6 +797,15 @@ pub fn fix(repo: &Repo, checks: &[Check]) -> Result<Vec<String>> {
     if checks.iter().any(|c| c.fixable && c.area == "setup") {
         setup::install(repo)?;
         done.push("installed merge drivers and hooks".to_owned());
+    }
+    if checks
+        .iter()
+        .any(|c| c.fixable && c.area == "managed files")
+    {
+        let projects = unity::find_projects(repo.root());
+        for name in setup::write_managed_files(repo, &projects)? {
+            done.push(format!("rewrote GANG's block in {name}"));
+        }
     }
     if checks.iter().any(|c| c.fixable && c.area == "unity") {
         for project in unity::find_projects(repo.root()) {
