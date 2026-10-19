@@ -63,6 +63,15 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
                 .iter()
                 .any(|a| a == "--abort" || a == "--quit" || a == "--skip");
             if !aborting && setup::is_gang_repo(&repo) {
+                if let Some(side) = one_side_for_all(&strings(&invocation.args)) {
+                    eprintln!(
+                        "✗ GANG asks every conflict on its own; `-X {side}` would settle them all for one side."
+                    );
+                    ui::hint(format!(
+                        "Run it without `-X {side}` and answer the questions with `gang bang`. (Plain git still does it: `gang git {name} -X {side} …`.)"
+                    ));
+                    return Ok(1);
+                }
                 let auto_remap = Config::load(repo.root())
                     .map(|c| c.layers.auto_remap)
                     .unwrap_or(true);
@@ -297,6 +306,27 @@ fn strings(args: &[OsString]) -> Vec<String> {
     args.iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect()
+}
+
+/// `-X ours` / `-X theirs` (git settles every text conflict for one side):
+/// the side it names.
+fn one_side_for_all(args: &[String]) -> Option<&str> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            break;
+        }
+        let value = if arg == "-X" || arg == "--strategy-option" {
+            iter.next().map(String::as_str)
+        } else {
+            arg.strip_prefix("--strategy-option=")
+                .or_else(|| arg.strip_prefix("-X"))
+        };
+        if let Some(side @ ("ours" | "theirs")) = value {
+            return Some(side);
+        }
+    }
+    None
 }
 
 fn has(args: &[String], options: &[&str]) -> bool {
@@ -747,6 +777,27 @@ fn file_name(path: &str) -> &str {
 /// their assets, and keeps a backup of the working tree.
 fn restore(invocation: &Invocation, repo: &Repo, checkout: bool) -> Result<i32> {
     let args = strings(&invocation.args);
+    // `--ours` / `--theirs` during a merge would settle every conflict in
+    // the named files at once; GANG asks them one by one (gang bang).
+    if has(&args, &["--ours", "--theirs", "-2", "-3"]) {
+        let unmerged = crate::bang::unmerged(repo)?;
+        if !unmerged.is_empty() {
+            let open = crate::bang::open_questions(repo).unwrap_or(0);
+            eprintln!(
+                "✗ GANG asks every conflict on its own: {open} {} open. Answer {} with `gang bang`.",
+                if open == 1 {
+                    "question is"
+                } else {
+                    "questions are"
+                },
+                if open == 1 { "it" } else { "them one by one" }
+            );
+            ui::hint(
+                "(Plain git still takes one side for whole files: `gang git checkout --theirs -- <file>`.)",
+            );
+            return Ok(1);
+        }
+    }
     if !checkout {
         let paths = positionals(&args, &["-s", "--source", "--pathspec-from-file"]);
         if has(&args, &["--noise"]) {

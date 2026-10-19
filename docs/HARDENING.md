@@ -140,7 +140,7 @@ The owner's brief for this round: **ask every conflict one by one**, find layer 
 
 ### 5.1 `gang bang` asks every conflict on its own
 
-There is no longer any way to answer several conflicts at once: `--prefer mine|theirs`, the `M`/`T` keys ("this whole object") and remembered answers applied without asking are gone. A remembered answer is offered under `Enter` on the question itself. Without a terminal, `gang bang --answer <choice>` answers the *next* open question only, after printing it (one hunk of a text file, one binary file). Test: `every_question_is_answered_on_its_own`; the pty test checks that `T` does nothing.
+There is no longer any way to answer several conflicts at once: `--prefer mine|theirs`, the `M`/`T` keys ("this whole object") and remembered answers applied without asking are gone. A remembered answer is offered under `Enter` on the question itself. Without a terminal, `gang bang --answer <choice>` answers the *next* open question only, after printing it (one hunk of a text file, one binary file). Test: `every_question_is_answered_on_its_own`; the pty test checks that `T` does nothing. The git side doors are closed too (R27, R28 below): `gang checkout/restore --ours/--theirs` during a merge and `-X ours|theirs` on merge, pull, rebase, cherry-pick and revert stop with a pointer to `gang bang`; `gang git …` remains plain git.
 
 ### 5.2 Layer numbers are reserved before anyone uses them (DESIGN §14.6)
 
@@ -154,7 +154,7 @@ Remaining hard limits: data that arrives at run time, reflection, compiled DLL i
 
 ### 5.4 Thought experiments
 
-Forty-eight team scenarios were walked through ("what would GANG do?"). Most were already handled (moves vs. edits, renames of scripts and objects, prefab variants, branch switching with Unity open, Windows path rules, append-only lists, sorting layers, package manifests…). These were not, and are now:
+Forty-eight team scenarios were walked through, then GANG's own new features were put through the same questions (R-rows) ("what would GANG do?"). Most were already handled (moves vs. edits, renames of scripts and objects, prefab variants, branch switching with Unity open, Windows path rules, append-only lists, sorting layers, package manifests…). These were not, and are now:
 
 | # | Scenario | Before | Now |
 |---|---|---|---|
@@ -164,6 +164,11 @@ Forty-eight team scenarios were walked through ("what would GANG do?"). Most wer
 | TE27 | A pull request merged with GitHub's button | GitHub's line merge, without GANG's driver: valid YAML, wrong scene | `gang pr merge <n>` (DESIGN §18.4) |
 | TE65 | A layer reserved on a feature branch, its author back on main | The reservation was released; a teammate could take the number | Kept while a local branch has the name |
 | TE74 | A list with an insert at the front on one side and an edit at the end on the other | A whole-list question | diff3 on the items; the same stretch changed twice still asks |
+| R3 | The merge-time layer remap with Unity open | The remap rewrote the TagManager under the editor, which would write its copy back | The layer pass waits for Unity to close (`--ignore-editor` goes ahead) |
+| R7 | `gang pr merge` into a protected base branch | The push was refused | The merge goes to the pull request's branch; GitHub's button then keeps GANG's result |
+| R11 | `gang pr merge` with Unity open | The working tree switched under the editor | Waits for Unity to close |
+| R27 | `gang checkout --theirs .` during a merge | Every conflict in the named files settled at once, for one side | Refused while questions are open; `gang bang` asks them one by one |
+| R28 | `gang merge -X theirs` (or `pull -Xours`, `rebase --strategy-option=theirs`) | git settled every text conflict for one side before GANG saw any | Refused; other `-X` options go through |
 | TE42 | A layer removed on one side while the other puts objects on it | Silent: the objects end up on a layer with no name | Reported during the sync; `gang doctor` lists objects on unnamed layers and undefined tags |
 | A1 | A prefab rebuilt with new ids | Instances lost their overrides silently | References repointed (DESIGN §13.9) |
 | §1.3 | A Unity file the parser rejects | Conflict markers in the file | Clean line merge or a whole-file question |

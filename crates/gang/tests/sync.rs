@@ -1377,3 +1377,79 @@ fn a_layer_move_waits_for_unity_to_close() {
         "{sync:?}"
     );
 }
+
+/// Thought experiment R27: `gang checkout --theirs` during a merge would
+/// settle every conflict in a file at once; GANG points to gang bang.
+#[test]
+fn whole_file_sides_during_a_merge_go_through_bang() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("1", "3", ""));
+    assert_eq!(team.sync("alice", "alice tuning").code, Some(0));
+    team.write("bob", SCENE, &scene("2", "4", ""));
+    assert_eq!(team.sync("bob", "bob tuning").code, Some(1));
+    for args in [
+        vec!["checkout", "--theirs", "--", SCENE],
+        vec!["restore", "--ours", "--", SCENE],
+    ] {
+        let refused = team.gang("bob", &args);
+        assert_eq!(refused.code, Some(1), "{refused:?}");
+        assert!(
+            refused
+                .stderr
+                .contains("GANG asks every conflict on its own: 2 questions are open"),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(
+        team.gang("bob", &["bang", "--answer", "theirs"]).code,
+        Some(1)
+    );
+    assert_eq!(
+        team.gang("bob", &["bang", "--answer", "theirs"]).code,
+        Some(0)
+    );
+}
+
+/// Thought experiment R28: `gang merge -X theirs` would let git settle every
+/// text conflict for one side before GANG could ask about any of them.
+#[test]
+fn one_side_for_every_conflict_is_refused() {
+    let team = Team::new();
+    let script = "Assets/Scripts/Player.cs";
+    team.write("alice", script, "class Player\n{\n    int speed = 2;\n}\n");
+    assert_eq!(team.sync("alice", "faster").code, Some(0));
+    team.write("bob", script, "class Player\n{\n    int speed = 3;\n}\n");
+    assert_eq!(
+        team.gang("bob", &["git", "commit", "-q", "-am", "even faster"])
+            .code,
+        Some(0)
+    );
+    assert_eq!(team.gang("bob", &["fetch", "-q"]).code, Some(0));
+    for args in [
+        vec!["merge", "-X", "theirs", "origin/main"],
+        vec!["pull", "-Xours"],
+        vec!["rebase", "--strategy-option=theirs", "origin/main"],
+    ] {
+        let refused = team.gang("bob", &args);
+        assert_eq!(refused.code, Some(1), "{refused:?}");
+        assert!(
+            refused
+                .stderr
+                .contains("would settle them all for one side"),
+            "{refused:?}"
+        );
+    }
+    assert!(team.read("bob", script).contains("speed = 3"));
+    assert!(!team.sandbox.dir.path().join("bob/.git/MERGE_HEAD").exists());
+    // Other strategy options still go through.
+    let merge = team.gang(
+        "bob",
+        &["merge", "-X", "patience", "--no-edit", "origin/main"],
+    );
+    assert_eq!(merge.code, Some(1), "{merge:?}");
+    assert_eq!(
+        team.gang("bob", &["bang", "--answer", "mine"]).code,
+        Some(0)
+    );
+    assert!(team.read("bob", script).contains("speed = 3"));
+}

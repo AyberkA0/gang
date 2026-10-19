@@ -896,7 +896,7 @@ Why: You both changed the x value of Player's position.
 
 Global keys: `?` details, `u` undo the last answer, `q` quit and keep progress.
 
-**Every conflict is asked on its own.** There is deliberately no key or flag that answers several conflicts at once (no "mine for everything", no "theirs for this object"): a conflict is exactly the place where two people changed the same thing, and each one deserves a look. Without a terminal, `gang bang --answer <choice>` answers the *next* open question only, after printing it; scripts call it once per question.
+**Every conflict is asked on its own.** There is deliberately no key or flag that answers several conflicts at once (no "mine for everything", no "theirs for this object"): a conflict is exactly the place where two people changed the same thing, and each one deserves a look. Without a terminal, `gang bang --answer <choice>` answers the *next* open question only, after printing it; scripts call it once per question. The git routes around the questions are closed the same way: during a merge `gang checkout --ours/--theirs` and `gang restore --ours/--theirs` stop and point to `gang bang`, and `gang merge|pull|rebase|cherry-pick|revert -X ours|theirs` (git settling every text conflict for one side) is refused. Plain git is still there for whoever means it: `gang git checkout --theirs -- <file>`.
 
 ### 15.4 "Both"
 
