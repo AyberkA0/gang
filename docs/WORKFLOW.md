@@ -262,24 +262,34 @@ Meanwhile, the `.directory` files Deniz's desktop environment drops into folders
 
 ## 11:30 · A layer conflict resolves itself
 
-At 11:02, Ayberk named layer 8 `Pickup` and pushed. Not knowing that, Deniz named layer 8 `UI3D`, put three menu objects on it, set the UI camera's culling mask to it, and wrote `1 << 8` in `MenuCamera.cs`.
+At 11:02, Ayberk named layer 8 `Pickup`; GANG reserved the number for him at once (DESIGN §14.6), and he pushed. Not knowing that, Deniz named layer 8 `UI3D`, put three menu objects on it, set the UI camera's culling mask and the collision matrix for it, and wrote `const int MenuMask = 1 << 8;` in `MenuCamera.cs`, passed to a raycast two calls later.
+
+Deniz's next save already says what will happen:
+
+```
+$ gang save -m "Main menu on its own layer"
+⚠ Layer 8 is "Pickup" on origin/main already; your "UI3D" moves to a free layer when you sync. Until then, avoid writing its number in code.
+✓ Saved 4a1c9e2 Main menu on its own layer
+```
+
+(Had Ayberk not pushed yet, his reservation would have done the same, and `gang save` would have moved Deniz's layer right there, before anyone else had it.)
 
 ```
 $ gang sync
 Layer conflict: Layer 8 is "Pickup" on origin/main (ayberk).
   → Moving "UI3D" to layer 9 and updating what your commits used it for:
     ✓ ProjectSettings/TagManager.asset: layer 8 → 9
+    ✓ ProjectSettings/DynamicsManager.asset: collision matrix (layer 8 → 9)
     ✓ Assets/Prefabs/UI/MainMenu.prefab: 3 objects (Layer)
     ✓ Assets/Scenes/Menu.unity: 1 layer mask
-    ✓ Assets/Scripts/UI/MenuCamera.cs:42
-    ⚠ ProjectSettings/DynamicsManager.asset: check the collision matrix for the moved layer — please review
-    ⚠ Assets/Scripts/UI/MenuRaycaster.cs:17: the number 8 next to "layer" — please review
+    ✓ Assets/Scripts/UI/MenuCamera.cs:12
+    ⚠ Assets/Scripts/UI/MenuRaycaster.cs:17: existing code gives 8 to Physics.Raycast(layerMask); it was not written for the moved layer, so it was left as is — please review
 ✓ Committed "gang: move layer UI3D from 8 to 9"
 Pulling 2 commits from ayberk…
 ✓ Pushed 3 commits
 ```
 
-No question was asked. Whoever pushed first keeps the index; GANG moved Deniz's layer to the first free one, rewrote every use it could recognize, and recorded it all in a commit:
+No question was asked. Whoever names a number first keeps it; GANG moved Deniz's layer to the first free one with everything that used it, and recorded it all in a commit. The script number was found by the C# compiler that ships with Unity: `MenuMask` never says "layer", but the compiler followed it into `Physics.Raycast(layerMask)`. The collision matrix moved with the layer, and Ayberk's matrix settings for `Pickup` merged cell by cell.
 
 ```
 $ gang log -1 --format=%B HEAD^1
@@ -289,18 +299,18 @@ Layer 8 is "Pickup" on origin/main (ayberk), so "UI3D" moved to layer 9.
 
 Updated:
 - ProjectSettings/TagManager.asset: layer 8 → 9
+- ProjectSettings/DynamicsManager.asset: collision matrix (layer 8 → 9)
 - Assets/Prefabs/UI/MainMenu.prefab: 3 objects (Layer)
 - Assets/Scenes/Menu.unity: 1 layer mask
-- Assets/Scripts/UI/MenuCamera.cs:42
+- Assets/Scripts/UI/MenuCamera.cs:12
 
 Needs review:
-- ProjectSettings/DynamicsManager.asset: check the collision matrix for the moved layer
-- Assets/Scripts/UI/MenuRaycaster.cs:17: the number 8 next to "layer"
+- Assets/Scripts/UI/MenuRaycaster.cs:17: existing code gives 8 to Physics.Raycast(layerMask); it was not written for the moved layer, so it was left as is
 
 Gang-Remap: layer 8 -> 9
 ```
 
-Deniz opens `MenuRaycaster.cs:17` and replaces the hard-coded number with `LayerMask.NameToLayer("UI3D")`, so it can never drift again.
+Deniz opens `MenuRaycaster.cs:17` and replaces the hard-coded number with `LayerMask.NameToLayer("UI3D")`, so it can never drift again. `gang layers code` lists every place a script still gives Unity a layer by number.
 
 ---
 
@@ -422,6 +432,23 @@ Plain git would have merged this "successfully" and left `BridgeTrigger` pointin
 
 ---
 
+## 16:45 · Zeynep merges a pull request
+
+Zeynep's new title screen came in as pull request #7 on GitHub. She does not press GitHub's merge button: GitHub merges Unity files line by line, without GANG.
+
+```
+> gang pr merge 7
+Merging main into pull request #7 (Title screen)…
+Pulling 3 commits from ayberk, mehmet…
+Merged automatically from ayberk, mehmet:
+  Title.unity (mehmet): 2 changes
+    ~ Canvas › CanvasScaler › Reference Resolution  (1920, 1080) → (2560, 1440)
+    + Canvas › Version label
+✓ Merged pull request #7 into main and pushed; GitHub marks it as merged
+```
+
+---
+
 ## 17:30 · End of day
 
 Ayberk opened Level3 earlier just to look at it:
@@ -467,7 +494,7 @@ Two things stand out: Deniz has two commits that never got pushed, and Mehmet's 
 | **Questions asked** | 2 (light intensity, deleted bridge) |
 | **Merged automatically** | Every other change in Level1 and Level2, `Pickup.cs`, and the `TagManager` after the layer remap |
 | **Fixed automatically** | Layer 8 collision — layer moved, 3 objects, a camera mask, a collision matrix and a line of code updated, and committed |
-| **Prevented** | Wrong Unity version, a case-only folder clash, a change to a locked object, an editor overwriting a synced scene, a dangling child in a deleted object, a noise-only commit |
+| **Prevented** | Wrong Unity version, a case-only folder clash, a change to a locked object, an editor overwriting a synced scene, a dangling child in a deleted object, a noise-only commit, a pull request merged line by line |
 | **Broken scenes** | 0 |
 
 ## Commands used
@@ -476,6 +503,9 @@ Two things stand out: Deniz has two commits that never got pushed, and Mehmet's 
 |---|---|
 | `gang clone owner/repo` | Joining a project (with GitHub login) |
 | `gang` | Team panel |
+| `gang note "…"` | Telling the team what you are working on |
+| `gang layers` | Who reserved which layer number; `gang layers code` lists layer numbers in scripts |
+| `gang pr merge <n>` | Merging a GitHub pull request with GANG's merge |
 | `gang tree <file>::<object>` | Finding an object's path |
 | `gang lock <target> [--level n] [-m reason]` | Locking a file or an object |
 | `gang lock <scene> --bake` | Locking lighting and NavMesh bake data |
