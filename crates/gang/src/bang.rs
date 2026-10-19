@@ -26,9 +26,12 @@ pub struct Args {
     /// List the conflicts without asking
     #[arg(long)]
     list: bool,
-    /// Answer every remaining question with mine or theirs
-    #[arg(long, value_parser = ["mine", "theirs"])]
-    prefer: Option<String>,
+    /// Answer the next open question only, without a terminal: mine,
+    /// theirs, original, both, delete, keep, reparent or value=<text>.
+    /// Every question is answered on its own; there is no way to answer
+    /// them all at once.
+    #[arg(long, value_name = "CHOICE")]
+    answer: Option<String>,
     /// Forget the answers given so far
     #[arg(long)]
     reset: bool,
@@ -111,10 +114,12 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
         save_rerere(repo, &rerere);
     }
 
-    if args.list || (!ui::interactive() && args.prefer.is_none()) {
+    if args.list || (!ui::interactive() && args.answer.is_none()) {
         list(&files, &others);
         if !args.list {
-            eprintln!("Run `gang bang` in a terminal to answer them.");
+            eprintln!(
+                "Run `gang bang` in a terminal to answer them one by one, or answer the next one with `gang bang --answer <choice>`."
+            );
             return Ok(1);
         }
         return Ok(0);
@@ -130,39 +135,21 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
             if file.answers.contains_key(&question.id) {
                 continue;
             }
-            if let Some(answer) = args.prefer.as_deref().map(|p| {
-                if p == "mine" {
-                    Answer::Ours
-                } else {
-                    Answer::Theirs
+            let remembered = rerere.get(&rerere_key(&file.path, &question)).cloned();
+            let step = match args.answer.as_deref() {
+                Some(choice) => {
+                    show(file, &question, asked, total, remembered.as_ref());
+                    let answer = parse_answer(choice, &question)?;
+                    let label = describe_answer(&answer, &question);
+                    Step::Answer(answer, label)
                 }
-            }) {
-                file.answers.insert(question.id.clone(), answer);
-                continue;
-            }
-            if let Some(answer) = rerere.get(&rerere_key(&file.path, &question)) {
-                println!(
-                    "✓ {} · {}: same answer as last time",
-                    short(&file.path),
-                    question.place
-                );
-                file.answers.insert(question.id.clone(), answer.clone());
-                continue;
-            }
-            match ask(file, &question, asked, total)? {
-                Step::Answer(answer) => {
+                None => ask(file, &question, asked, total, remembered.as_ref())?,
+            };
+            match step {
+                Step::Answer(answer, label) => {
+                    println!("> {label}");
                     rerere.insert(rerere_key(&file.path, &question), answer.clone());
                     file.answers.insert(question.id.clone(), answer);
-                }
-                Step::AllInObject(answer) => {
-                    let object = question.id.split(':').next().unwrap_or("").to_owned();
-                    for q in &file.questions {
-                        if q.id.split(':').next() == Some(object.as_str())
-                            && !file.answers.contains_key(&q.id)
-                        {
-                            file.answers.insert(q.id.clone(), answer.clone());
-                        }
-                    }
                 }
                 Step::Undo => {
                     if let Some(last) = file
@@ -185,15 +172,46 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
                 }
             }
             store::save(repo, file)?;
+            if args.answer.is_some() {
+                // One answer per run: every question is seen and answered
+                // on its own.
+                save_rerere(repo, &rerere);
+                let left = total - asked;
+                if left > 0 {
+                    println!(
+                        "{left} question{} left. Run `gang bang` again for the next one.",
+                        if left == 1 { "" } else { "s" }
+                    );
+                    return Ok(1);
+                }
+            }
         }
     }
     save_rerere(repo, &rerere);
 
     for path in &others {
         asked += 1;
-        if !resolve_plain_file(repo, path, args.prefer.as_deref(), asked, total)? {
-            println!("\nRun `gang bang` to continue.");
-            return Ok(1);
+        match resolve_plain_file(repo, path, args.answer.as_deref(), asked, total)? {
+            Plain::Resolved => {
+                let left = total - asked;
+                if args.answer.is_some() && left > 0 {
+                    println!(
+                        "{left} question{} left. Run `gang bang` again for the next one.",
+                        if left == 1 { "" } else { "s" }
+                    );
+                    return Ok(1);
+                }
+            }
+            Plain::Partly => {
+                println!(
+                    "More conflicts are left in {path}. Run `gang bang` again for the next one."
+                );
+                return Ok(1);
+            }
+            Plain::Stopped => {
+                println!("\nRun `gang bang` to continue.");
+                return Ok(1);
+            }
         }
     }
 
@@ -212,7 +230,7 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
                 }
             }
         }
-        if ui::interactive() && args.prefer.is_none() && !ui::confirm("Apply them?", true)? {
+        if ui::interactive() && args.answer.is_none() && !ui::confirm("Apply them?", true)? {
             println!("Nothing written. Your answers are kept; run `gang bang` to change them.");
             return Ok(1);
         }
@@ -249,13 +267,60 @@ fn short(path: &str) -> &str {
 }
 
 enum Step {
-    Answer(Answer),
-    AllInObject(Answer),
+    /// The answer and the words of the option that was picked.
+    Answer(Answer, String),
     Undo,
     Quit,
 }
 
-fn ask(file: &Pending, q: &Question, n: usize, total: usize) -> Result<Step> {
+/// How far a text or binary file got.
+enum Plain {
+    Resolved,
+    /// `--answer` settled one hunk; more are left in the file.
+    Partly,
+    Stopped,
+}
+
+/// Turns `--answer`'s word into an answer that fits the question.
+fn parse_answer(choice: &str, q: &Question) -> Result<Answer> {
+    let deletion = matches!(q.kind, Kind::DeletedByYou | Kind::DeletedByThem);
+    let answer = match (choice, deletion) {
+        ("delete", true) => Answer::Delete,
+        ("keep", true) => Answer::Keep,
+        ("reparent", true) if !q.orphans.is_empty() => Answer::Reparent,
+        ("mine", false) => Answer::Ours,
+        ("theirs", false) => Answer::Theirs,
+        ("original", false) if q.base.is_some() && q.kind == Kind::Value => Answer::Base,
+        ("both", false) if both(q).is_some() => Answer::Value(both(q).unwrap_or_default().1),
+        (other, false) if q.kind == Kind::Value && other.starts_with("value=") => {
+            Answer::Value(other["value=".len()..].to_owned())
+        }
+        _ => {
+            let fits = if deletion {
+                if q.orphans.is_empty() {
+                    "delete or keep"
+                } else {
+                    "delete, keep or reparent"
+                }
+            } else if q.kind == Kind::Value {
+                "mine, theirs, original, both or value=<text>"
+            } else {
+                "mine or theirs"
+            };
+            bail!("\"{choice}\" does not fit {}: use {fits}", q.place)
+        }
+    };
+    Ok(answer)
+}
+
+/// Prints the question and returns its options.
+fn show(
+    file: &Pending,
+    q: &Question,
+    n: usize,
+    total: usize,
+    remembered: Option<&Answer>,
+) -> Vec<(char, String, Answer)> {
     let theirs = file.theirs_name.as_str();
     println!();
     println!(
@@ -331,15 +396,36 @@ fn ask(file: &Pending, q: &Question, n: usize, total: usize) -> Result<Step> {
         .map(|(k, text, _)| format!("[{k}] {text}"))
         .collect();
     println!("{}", line.join("   "));
-    println!("[?] details   [u] undo   [M]/[T] mine/theirs for this whole object   [q] quit");
+    if let Some(answer) = remembered {
+        println!(
+            "Last time you answered this same conflict: {}. [Enter] answer the same again",
+            describe_answer(answer, q)
+        );
+    }
+    println!("[?] details   [u] undo   [q] quit");
+    options
+}
 
+fn ask(
+    file: &Pending,
+    q: &Question,
+    n: usize,
+    total: usize,
+    remembered: Option<&Answer>,
+) -> Result<Step> {
+    let options = show(file, q, n, total, remembered);
     loop {
         let key = read_key()?;
         match key {
             'q' => return Ok(Step::Quit),
             'u' => return Ok(Step::Undo),
-            'M' => return Ok(Step::AllInObject(Answer::Ours)),
-            'T' => return Ok(Step::AllInObject(Answer::Theirs)),
+            '\n' => {
+                if let Some(answer) = remembered {
+                    let label = format!("{} (as last time)", describe_answer(answer, q));
+                    return Ok(Step::Answer(answer.clone(), label));
+                }
+                continue;
+            }
             '?' => {
                 println!("\n{}", details(file, q));
                 continue;
@@ -349,13 +435,13 @@ fn ask(file: &Pending, q: &Question, n: usize, total: usize) -> Result<Step> {
                 if value.is_empty() {
                     continue;
                 }
-                return Ok(Step::Answer(Answer::Value(value)));
+                let label = format!("set to {value}");
+                return Ok(Step::Answer(Answer::Value(value), label));
             }
             _ => {}
         }
         if let Some((_, text, answer)) = options.iter().find(|(k, _, _)| *k == key) {
-            println!("> {text}");
-            return Ok(Step::Answer(answer.clone()));
+            return Ok(Step::Answer(answer.clone(), text.clone()));
         }
     }
 }
@@ -436,6 +522,7 @@ fn read_key() -> Result<char> {
                 }
                 match key.code {
                     KeyCode::Char(c) => break c,
+                    KeyCode::Enter => break '\n',
                     KeyCode::Esc => break 'q',
                     _ => {}
                 }
@@ -460,23 +547,25 @@ fn read_line(prompt: &str) -> Result<String> {
 }
 
 /// A text or binary file with a conflict: hunk by hunk, or whole file.
+/// With `--answer`, only the next hunk (or the binary file) is answered.
 fn resolve_plain_file(
     repo: &Repo,
     path: &str,
-    prefer: Option<&str>,
+    answer: Option<&str>,
     n: usize,
     total: usize,
-) -> Result<bool> {
+) -> Result<Plain> {
     let full = repo.root().join(path);
     let bytes = std::fs::read(&full).unwrap_or_default();
     let text = String::from_utf8(bytes)
         .ok()
         .filter(|t| t.contains("<<<<<<< "));
     let Some(text) = text else {
-        return resolve_binary(repo, path, prefer, n, total);
+        return resolve_binary(repo, path, answer, n, total);
     };
+    let rebasing = repo.rebasing();
     let mut hunks = parse_hunks(&text);
-    if repo.rebasing() {
+    if rebasing {
         // During a rebase the first side of a hunk is the upstream commit.
         for part in &mut hunks {
             if let Part::Hunk { ours, theirs } = part {
@@ -484,40 +573,55 @@ fn resolve_plain_file(
             }
         }
     }
+    let count = hunks
+        .iter()
+        .filter(|p| matches!(p, Part::Hunk { .. }))
+        .count();
     let mut out = String::new();
-    for (i, part) in hunks.iter().enumerate() {
+    let mut number = 0;
+    let mut answered = false;
+    for part in &hunks {
         match part {
             Part::Text(t) => out.push_str(t),
             Part::Hunk { ours, theirs } => {
-                let answer = match prefer {
+                number += 1;
+                if answered {
+                    // `--answer` settles one hunk per run; the rest keep
+                    // their markers for the next run.
+                    out.push_str(&markers(ours, theirs, rebasing));
+                    continue;
+                }
+                println!();
+                println!(
+                    "{}",
+                    ui::bold(format!(
+                        "{} · conflict {n}/{total} · hunk {number}/{count}",
+                        short(path)
+                    ))
+                );
+                println!("{}", "─".repeat(58));
+                println!("you:\n{}", indent(ours));
+                println!("theirs:\n{}", indent(theirs));
+                println!(
+                    "[m] mine   [t] theirs   [b] both (mine first)   [B] both (theirs first)   [e] edit   [q] quit"
+                );
+                let key = match answer {
                     Some("mine") => 'm',
-                    Some(_) => 't',
-                    None => {
-                        println!();
-                        println!(
-                            "{}",
-                            ui::bold(format!(
-                                "{} · conflict {n}/{total} · hunk {}",
-                                short(path),
-                                i / 2 + 1
-                            ))
-                        );
-                        println!("{}", "─".repeat(58));
-                        println!("you:\n{}", indent(ours));
-                        println!("theirs:\n{}", indent(theirs));
-                        println!(
-                            "[m] mine   [t] theirs   [b] both (mine first)   [B] both (theirs first)   [e] edit   [q] quit"
-                        );
-                        loop {
-                            match read_key()? {
-                                'q' => return Ok(false),
-                                c @ ('m' | 't' | 'b' | 'B' | 'e') => break c,
-                                _ => {}
-                            }
+                    Some("theirs") => 't',
+                    Some("both") => 'b',
+                    Some("both-theirs-first") => 'B',
+                    Some(other) => bail!(
+                        "\"{other}\" does not fit a text conflict: use mine, theirs, both or both-theirs-first"
+                    ),
+                    None => loop {
+                        match read_key()? {
+                            'q' => return Ok(Plain::Stopped),
+                            c @ ('m' | 't' | 'b' | 'B' | 'e') => break c,
+                            _ => {}
                         }
-                    }
+                    },
                 };
-                match answer {
+                match key {
                     'm' => out.push_str(ours),
                     't' => out.push_str(theirs),
                     'b' => {
@@ -530,60 +634,76 @@ fn resolve_plain_file(
                     }
                     _ => out.push_str(&edit(&format!("{ours}{theirs}"))?),
                 }
+                if answer.is_some() {
+                    answered = true;
+                }
             }
         }
     }
     std::fs::write(&full, out)?;
+    if answered && number < count {
+        return Ok(Plain::Partly);
+    }
     repo.run(["add", "--", path])?;
-    Ok(true)
+    Ok(Plain::Resolved)
+}
+
+/// A hunk written back with git's markers, in git's own order.
+fn markers(ours: &str, theirs: &str, rebasing: bool) -> String {
+    let (first, second) = if rebasing {
+        (theirs, ours)
+    } else {
+        (ours, theirs)
+    };
+    format!("<<<<<<< ours\n{first}=======\n{second}>>>>>>> theirs\n")
 }
 
 fn resolve_binary(
     repo: &Repo,
     path: &str,
-    prefer: Option<&str>,
+    answer: Option<&str>,
     n: usize,
     total: usize,
-) -> Result<bool> {
+) -> Result<Plain> {
     // git's --ours / stage 2 is the upstream commit during a rebase.
     let (mine, theirs, theirs_stage) = if repo.rebasing() {
         ("--theirs", "--ours", 2)
     } else {
         ("--ours", "--theirs", 3)
     };
-    let side = match prefer {
+    println!();
+    println!(
+        "{}",
+        ui::bold(format!("{} · conflict {n}/{total}", short(path)))
+    );
+    println!("{}", "─".repeat(58));
+    println!("{path} cannot be merged: you and the other side both changed it.");
+    println!("[m] mine   [t] theirs   [a] save theirs next to it to compare   [q] quit");
+    let side = match answer {
         Some("mine") => mine,
-        Some(_) => theirs,
-        None => {
-            println!();
-            println!(
-                "{}",
-                ui::bold(format!("{} · conflict {n}/{total}", short(path)))
-            );
-            println!("{}", "─".repeat(58));
-            println!("{path} cannot be merged: you and the other side both changed it.");
-            println!("[m] mine   [t] theirs   [a] save theirs next to it to compare   [q] quit");
-            loop {
-                match read_key()? {
-                    'q' => return Ok(false),
-                    'm' => break mine,
-                    't' => break theirs,
-                    'a' => {
-                        let copy = format!("{path}.theirs");
-                        let bytes = repo
-                            .output(["show", &format!(":{theirs_stage}:{path}")])?
-                            .stdout;
-                        std::fs::write(repo.root().join(&copy), bytes)?;
-                        println!("Saved theirs as {copy}. Compare, then choose.");
-                    }
-                    _ => {}
+        Some("theirs") => theirs,
+        Some(other) => bail!("\"{other}\" does not fit a binary file: use mine or theirs"),
+        None => loop {
+            match read_key()? {
+                'q' => return Ok(Plain::Stopped),
+                'm' => break mine,
+                't' => break theirs,
+                'a' => {
+                    let copy = format!("{path}.theirs");
+                    let bytes = repo
+                        .output(["show", &format!(":{theirs_stage}:{path}")])?
+                        .stdout;
+                    std::fs::write(repo.root().join(&copy), bytes)?;
+                    println!("Saved theirs as {copy}. Compare, then choose.");
                 }
+                _ => {}
             }
-        }
+        },
     };
+    println!("> {}", if side == mine { "mine" } else { "theirs" });
     repo.run(["checkout", side, "--", path])?;
     repo.run(["add", "--", path])?;
-    Ok(true)
+    Ok(Plain::Resolved)
 }
 
 fn indent(text: &str) -> String {

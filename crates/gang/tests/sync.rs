@@ -127,6 +127,51 @@ fn different_changes_to_one_scene_merge_without_questions() {
     assert_eq!(team.read("alice", SCENE), scene("5", "3", ""));
 }
 
+/// Every conflict is answered on its own: `--answer` settles exactly one
+/// question per run, and there is no option that answers them all.
+#[test]
+fn every_question_is_answered_on_its_own() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("1", "3", ""));
+    assert_eq!(team.sync("alice", "alice tuning").code, Some(0));
+    team.write("bob", SCENE, &scene("2", "4", ""));
+    assert_eq!(team.sync("bob", "bob tuning").code, Some(1));
+
+    let first = team.gang("bob", &["bang", "--answer", "theirs"]);
+    assert_eq!(first.code, Some(1), "{first:?}");
+    assert!(first.stdout.contains("conflict 1/2"), "{first:?}");
+    assert!(first.stdout.contains("1 question left"), "{first:?}");
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert_eq!(list.stdout.matches("(open)").count(), 1, "{list:?}");
+    assert_eq!(list.stdout.matches("(answered)").count(), 1, "{list:?}");
+
+    let wrong = team.gang("bob", &["bang", "--answer", "delete"]);
+    assert_ne!(wrong.code, Some(0), "{wrong:?}");
+    assert!(wrong.stderr.contains("does not fit"), "{wrong:?}");
+
+    let second = team.gang("bob", &["bang", "--answer", "mine"]);
+    assert_eq!(second.code, Some(0), "{second:?}");
+    assert!(second.stdout.contains("conflict 2/2"), "{second:?}");
+    let text = team.read("bob", SCENE);
+    assert!(!text.contains("<<<<<<<"), "{text}");
+    let both: Vec<&str> = [("x: 1", "x: 2"), ("jumpHeight: 3", "jumpHeight: 4")]
+        .iter()
+        .map(|(a, b)| {
+            if text.contains(a) {
+                "theirs"
+            } else if text.contains(b) {
+                "mine"
+            } else {
+                "?"
+            }
+        })
+        .collect();
+    assert_eq!(both, ["theirs", "mine"], "{text}");
+
+    let help = team.gang("bob", &["help", "bang"]);
+    assert!(!help.stdout.contains("--prefer"), "{help:?}");
+}
+
 #[test]
 fn same_property_asks_and_bang_resolves() {
     let team = Team::new();
@@ -149,7 +194,7 @@ fn same_property_asks_and_bang_resolves() {
         "{list:?}"
     );
 
-    let bang = team.gang("bob", &["bang", "--prefer", "theirs"]);
+    let bang = team.gang("bob", &["bang", "--answer", "theirs"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert_eq!(team.read("bob", SCENE), scene("0", "3", ""));
     let log = team
@@ -189,7 +234,7 @@ fn code_conflicts_resolve_hunk_by_hunk() {
         "class Player\n{\n    int speed = 3;\n}\n",
     );
     assert_eq!(team.sync("bob", "speed 3").code, Some(1));
-    let bang = team.gang("bob", &["bang", "--prefer", "mine"]);
+    let bang = team.gang("bob", &["bang", "--answer", "mine"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert_eq!(
         team.read("bob", "Assets/Scripts/Player.cs"),
@@ -215,7 +260,7 @@ fn deleted_object_with_a_new_child_is_kept_by_default() {
         "{list:?}"
     );
     assert_eq!(
-        team.gang("bob", &["bang", "--prefer", "mine"]).code,
+        team.gang("bob", &["bang", "--answer", "keep"]).code,
         Some(0)
     );
     let text = team.read("bob", SCENE);
@@ -590,7 +635,7 @@ fn an_empty_folder_meta_does_not_block_the_merge() {
     // Bob's merge needs an answer, so its commit runs the pre-commit checks.
     team.write("bob", SCENE, &scene("0", "4", ""));
     assert_eq!(team.sync("bob", "jump").code, Some(1));
-    let bang = team.gang("bob", &["bang", "--prefer", "theirs"]);
+    let bang = team.gang("bob", &["bang", "--answer", "theirs"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert!(!bang.stderr.contains("has no asset"), "{bang:?}");
 }
@@ -638,7 +683,7 @@ fn same_property_when_rebasing_mine_is_still_mine() {
     let list = team.gang("bob", &["bang", "--list"]);
     assert!(list.stdout.contains("Jump Height"), "{list:?}");
 
-    let bang = team.gang("bob", &["bang", "--prefer", "mine"]);
+    let bang = team.gang("bob", &["bang", "--answer", "mine"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert_eq!(team.read("bob", SCENE), scene("0", "4", ""));
     let log = team
@@ -656,7 +701,7 @@ fn same_property_when_rebasing_theirs_is_the_teammates() {
     assert_eq!(team.sync("alice", "alice jump").code, Some(0));
     team.write("bob", SCENE, &scene("0", "4", ""));
     assert_eq!(team.sync("bob", "bob jump").code, Some(1));
-    let bang = team.gang("bob", &["bang", "--prefer", "theirs"]);
+    let bang = team.gang("bob", &["bang", "--answer", "theirs"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert_eq!(team.read("bob", SCENE), scene("0", "3", ""));
 }
@@ -680,7 +725,7 @@ fn code_conflicts_when_rebasing_keep_mine() {
             .code,
         Some(1)
     );
-    let bang = team.gang("bob", &["bang", "--prefer", "mine"]);
+    let bang = team.gang("bob", &["bang", "--answer", "mine"]);
     assert_eq!(bang.code, Some(0), "{bang:?}");
     assert_eq!(
         team.read("bob", "Assets/Scripts/Player.cs"),
@@ -724,7 +769,7 @@ fn deleted_object_when_rebasing_names_the_teammate() {
         "{list:?}"
     );
     assert_eq!(
-        team.gang("bob", &["bang", "--prefer", "mine"]).code,
+        team.gang("bob", &["bang", "--answer", "keep"]).code,
         Some(0)
     );
     let text = team.read("bob", SCENE);

@@ -99,7 +99,7 @@ Arguments:
 
 Options:
       --list             List the conflicts without asking
-      --prefer <PREFER>  Answer every remaining question with mine or theirs [possible values: mine, theirs]
+      --answer <CHOICE>  Answer the next open question only, without a terminal: mine, theirs, original, both, delete, keep, reparent or value=<text>. Every question is answered on its own; there is no way to answer them all at once
       --reset            Forget the answers given so far
   -h, --help             Print help
 ```

@@ -210,7 +210,6 @@ fn sync_offers_bang_and_every_key_answers_value_conflicts() {
             "[e] edit",
             "[?] details",
             "[u] undo",
-            "[M]/[T] mine/theirs for this whole object",
         ],
     );
     sync.send("b");
@@ -247,13 +246,27 @@ fn sync_offers_bang_and_every_key_answers_value_conflicts() {
     sync.send("t");
     sync.expect("> theirs");
 
-    // Theirs for the whole camera script answers both of its questions.
+    // Every question is asked on its own: there is no key that answers a
+    // whole object (or everything) at once.
     let screen = sync.expect("[q] quit");
     assert_shows(
         &screen,
         &["conflict 5/6", "Main Camera › MonoBehaviour › Offset"],
     );
+    assert!(
+        !screen.contains("[M]") && !screen.contains("[T]"),
+        "{screen}"
+    );
     sync.send("T");
+    sync.send("t");
+    sync.expect("> theirs");
+    let screen = sync.expect("[q] quit");
+    assert_shows(
+        &screen,
+        &["conflict 6/6", "Main Camera › MonoBehaviour › Smoothing"],
+    );
+    sync.send("t");
+    sync.expect("> theirs");
 
     let summary = sync.expect("Apply them? [Y/n]");
     assert_shows(

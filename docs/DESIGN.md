@@ -226,7 +226,7 @@ The merge driver is registered through `.gitattributes`, so the merge part of **
 | Command | Purpose |
 |---|---|
 | `gang` | Team panel (TUI): team state, your changes, locks, notices. Runs the presence loop while open |
-| `gang bang [file] [--list] [--prefer mine\|theirs] [--review] [--reset]` | Quick conflict questions (§15) |
+| `gang bang [file] [--list] [--answer <choice>] [--review] [--reset]` | Quick conflict questions, one at a time (§15) |
 | `gang save [-m msg] [--push]` | Guarded `add -A` + `commit` (+ push) |
 | `gang sync [--rebase]` | Save prompt → fetch → pre-merge passes → merge → bang → push (§18.1) |
 | `gang undo` | Undo the last GANG operation (§18.2) |
@@ -854,7 +854,9 @@ Why: You both changed the x value of Player's position.
 | Package version | `m` mine · `t` theirs |
 | `ProjectVersion.txt` | `m` mine · `t` theirs |
 
-Global keys: `?` details, `u` undo the last answer, `M` / `T` mine / theirs for every remaining conflict on this object, `q` quit and keep progress.
+Global keys: `?` details, `u` undo the last answer, `q` quit and keep progress.
+
+**Every conflict is asked on its own.** There is deliberately no key or flag that answers several conflicts at once (no "mine for everything", no "theirs for this object"): a conflict is exactly the place where two people changed the same thing, and each one deserves a look. Without a terminal, `gang bang --answer <choice>` answers the *next* open question only, after printing it; scripts call it once per question.
 
 ### 15.4 "Both"
 
@@ -870,7 +872,7 @@ Global keys: `?` details, `u` undo the last answer, `M` / `T` mine / theirs for 
 - Progress is saved in `.git/gang/merge-state.json`; `gang bang` resumes after `q`. Meanwhile the file on disk is valid and Unity can open it.
 - Before writing, a summary of all answers is shown for confirmation.
 - Resolved files are written and staged (`git add`); during a rebase, `--continue` is offered.
-- **Semantic rerere:** answers are stored in `.git/gang/rerere/`; the same conflict seen again (for example in the next rebase step) is resolved the same way, with a notice.
+- **Semantic rerere:** answers are stored in `.git/gang/rerere.json`; when the same conflict comes back (for example in the next rebase step) the question is still asked, with the earlier answer offered under `Enter`. Nothing is answered without the user seeing it.
 - `--review` steps through automatically merged changes too.
 - After a merge, a summary of automatic merges is printed:
   ```
