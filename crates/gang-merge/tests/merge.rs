@@ -526,10 +526,17 @@ fn lists_both_sides_appended_to_keep_both() {
     let base = ["a1", "a2"];
     let ours = ["a1", "a2", "d00a", "eeee"];
     let theirs = ["a1", "a2", "b0b1"];
-    let (text, merged) = auto(&prefab_list(&base), &prefab_list(&ours), &prefab_list(&theirs));
+    let (text, merged) = auto(
+        &prefab_list(&base),
+        &prefab_list(&ours),
+        &prefab_list(&theirs),
+    );
     assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
     for name in ["a1", "a2", "d00a", "eeee", "b0b1"] {
-        assert!(text.contains(&format!("{name:0>32}")), "{name} lost:\n{text}");
+        assert!(
+            text.contains(&format!("{name:0>32}")),
+            "{name} lost:\n{text}"
+        );
     }
 }
 
@@ -541,4 +548,44 @@ fn lists_with_changed_items_still_ask() {
     let theirs = prefab_list(&["a1", "ffff", "b0b1"]);
     let (_, merged) = auto(&base, &ours, &theirs);
     assert!(!merged.conflicts.is_empty());
+}
+
+/// Field test A4: Room_B at z = 20 is deleted, EnemySpawner was added under
+/// it at local z = 4.8. Moved to the parent, it must stay at world z = 24.8.
+#[test]
+fn reparented_child_keeps_its_world_position() {
+    let at = |text: String, z: &str| {
+        text.replace(
+            "m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_Children: []\n  m_Father: {fileID: 11}",
+            &format!("m_LocalPosition: {{x: 0, y: 0, z: {z}}}\n  m_LocalScale: {{x: 1, y: 1, z: 1}}\n  m_Children: []\n  m_Father: {{fileID: 11}}"),
+        )
+    };
+    // Player (20/21) plays the part of Room_B, at z = 20 under Environment.
+    let base = at(base_scene(), "20");
+    let theirs = [
+        HEADER.to_owned(),
+        game_object(10, "Environment", &[11]),
+        transform(11, 10, 0, &[]),
+    ]
+    .concat();
+    let ours = base.replace(
+        "  m_Children: []\n  m_Father: {fileID: 11}",
+        "  m_Children:\n  - {fileID: 51}\n  m_Father: {fileID: 11}",
+    ) + &game_object(50, "EnemySpawner", &[51])
+        + &transform(51, 50, 21, &[]).replace("z: 0}\n  m_LocalScale", "z: 4.8}\n  m_LocalScale");
+    let (_, merged) = auto(&base, &ours, &theirs);
+    let id = merged.conflicts[0].id.clone();
+    let text = run(
+        &base,
+        &ours,
+        &theirs,
+        &HashMap::from([(id, Choice::Reparent)]),
+    )
+    .file
+    .to_text();
+    let spawner = text.split("--- !u!4 &51").nth(1).unwrap();
+    assert!(
+        spawner.contains("m_LocalPosition: {x: 0, y: 0, z: 24.8}"),
+        "{spawner}"
+    );
 }

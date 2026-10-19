@@ -91,9 +91,11 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
             restore_index(&repo);
             bail!("a message is needed: gang save -m \"…\"")
         }
-        paragraphs => paragraphs.join("
+        paragraphs => paragraphs.join(
+            "
 
-"),
+",
+        ),
     };
 
     let op = safety::begin(&repo, "save", false)?;

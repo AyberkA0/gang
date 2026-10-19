@@ -458,7 +458,11 @@ fn save_refuses_while_conflicts_are_open() {
     assert_eq!(team.sync("alice", "alice jump").code, Some(0));
     team.write("bob", SCENE, &scene("0", "4", ""));
     assert_eq!(team.sync("bob", "bob jump").code, Some(1));
-    team.write("bob", "Assets/Scripts/Player.cs", "class Player\n{\n    int speed = 2;\n}\n");
+    team.write(
+        "bob",
+        "Assets/Scripts/Player.cs",
+        "class Player\n{\n    int speed = 2;\n}\n",
+    );
     let save = team.gang("bob", &["save", "-m", "more"]);
     assert_eq!(save.code, Some(1), "{save:?}");
     assert!(save.stderr.contains("gang bang"), "{save:?}");
@@ -469,9 +473,18 @@ fn save_refuses_while_conflicts_are_open() {
 #[test]
 fn several_messages_become_paragraphs() {
     let team = Team::new();
-    team.write("alice", "Assets/Scripts/Player.cs", "class Player\n{\n    int speed = 2;\n}\n");
-    let save = team.gang("alice", &["save", "-m", "Faster player", "-m", "Speed 1 felt slow."]);
+    team.write(
+        "alice",
+        "Assets/Scripts/Player.cs",
+        "class Player\n{\n    int speed = 2;\n}\n",
+    );
+    let save = team.gang(
+        "alice",
+        &["save", "-m", "Faster player", "-m", "Speed 1 felt slow."],
+    );
     assert_eq!(save.code, Some(0), "{save:?}");
-    let log = team.sandbox.run_in("alice", "git", &["log", "-1", "--format=%B"]);
+    let log = team
+        .sandbox
+        .run_in("alice", "git", &["log", "-1", "--format=%B"]);
     assert_eq!(log.stdout.trim_end(), "Faster player\n\nSpeed 1 felt slow.");
 }

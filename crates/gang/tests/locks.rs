@@ -444,8 +444,11 @@ fn force_unlock_tells_the_team() {
 fn a_refused_save_leaves_the_index_alone() {
     let team = Team::new(&["alice", "bob"]);
     assert_eq!(
-        team.gang("alice", &["lock", "Assets/Art/Notes.txt", "-m", "rewriting"])
-            .code,
+        team.gang(
+            "alice",
+            &["lock", "Assets/Art/Notes.txt", "-m", "rewriting"]
+        )
+        .code,
         Some(0)
     );
     team.gang("bob", &["locks"]);
@@ -461,5 +464,8 @@ fn a_refused_save_leaves_the_index_alone() {
     let staged = team.git("bob", &["diff", "--cached", "--name-only"]);
     assert_eq!(staged.stdout, "", "a refused save staged files");
     let changed = team.git("bob", &["diff", "--name-only"]);
-    assert!(changed.stdout.contains("Assets/Art/Notes.txt"), "{changed:?}");
+    assert!(
+        changed.stdout.contains("Assets/Art/Notes.txt"),
+        "{changed:?}"
+    );
 }

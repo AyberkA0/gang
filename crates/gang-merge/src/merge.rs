@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use unity_yaml::{Doc, Entry, File, FileId, Item, Map, ObjRef, Scalar, Value};
 
 use crate::diff::Rules;
+use crate::transform::Trs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -933,6 +934,23 @@ impl Merger<'_> {
                     file.docs
                         .retain(|d| d.file_id.is_none_or(|id| !object_docs.contains(&id)));
                     for orphan in &orphans {
+                        // The deleted ancestors' transforms, so the orphan
+                        // keeps its place in the world (DESIGN.md §13.6).
+                        let ancestors = file
+                            .doc(*orphan)
+                            .filter(|d| d.class_id == Some(4))
+                            .and_then(|d| d.body())
+                            .and_then(|b| b.get("m_Father"))
+                            .and_then(Value::as_ref)
+                            .map(|r| {
+                                deleted_chain(
+                                    keeper,
+                                    base,
+                                    r.file_id,
+                                    parent_transform.unwrap_or(0),
+                                )
+                            })
+                            .unwrap_or_default();
                         let Some(doc) = file.doc_mut(*orphan) else {
                             continue;
                         };
@@ -945,6 +963,14 @@ impl Merger<'_> {
                                         ObjRef::local(parent_transform.unwrap_or(0)).to_scalar(),
                                     ),
                                 );
+                                if !ancestors.is_empty() {
+                                    let local = Trs::read(body);
+                                    ancestors
+                                        .iter()
+                                        .fold(Trs::IDENTITY, |m, t| m.then(t))
+                                        .then(&local)
+                                        .write(body);
+                                }
                             }
                         }
                     }
@@ -1098,6 +1124,30 @@ fn sorted_position(docs: &[Doc], id: FileId) -> usize {
     docs.iter()
         .position(|d| roots(d) || (!settings(d) && d.file_id.is_some_and(|f| f > id)))
         .unwrap_or(docs.len())
+}
+
+/// The local transforms from `stop` (exclusive) down to `father`
+/// (inclusive), top first, read from the side that kept them or the base.
+fn deleted_chain(keeper: &File, base: &File, father: FileId, stop: FileId) -> Vec<Trs> {
+    let mut chain = Vec::new();
+    let mut current = father;
+    while current != 0 && current != stop && chain.len() < 256 {
+        let Some(body) = keeper
+            .doc(current)
+            .or_else(|| base.doc(current))
+            .and_then(|d| d.body())
+        else {
+            break;
+        };
+        chain.push(Trs::read(body));
+        current = body
+            .get("m_Father")
+            .and_then(Value::as_ref)
+            .map(|r| r.file_id)
+            .unwrap_or(0);
+    }
+    chain.reverse();
+    chain
 }
 
 fn transform_of(file: &File, object: FileId) -> Option<FileId> {
