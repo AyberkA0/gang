@@ -50,6 +50,28 @@ impl Repo {
         &self.git_dir
     }
 
+    /// Whether a rebase is in progress. Git swaps the sides then: "ours" is
+    /// the upstream commit, "theirs" the user's own commit being replayed.
+    pub fn rebasing(&self) -> bool {
+        self.rebase_dir().is_some()
+    }
+
+    /// The commit a rebase in progress replays onto.
+    pub fn rebase_onto(&self) -> Option<String> {
+        let onto = std::fs::read_to_string(self.rebase_dir()?.join("onto")).ok()?;
+        Some(onto.trim().to_owned()).filter(|o| !o.is_empty())
+    }
+
+    fn rebase_dir(&self) -> Option<PathBuf> {
+        let merge = self.git_dir.join("rebase-merge");
+        if merge.is_dir() {
+            return Some(merge);
+        }
+        // `rebase-apply` is also `git am`'s, which does not swap the sides.
+        let apply = self.git_dir.join("rebase-apply");
+        apply.join("rebasing").exists().then_some(apply)
+    }
+
     /// `.git/gang/`, where GANG keeps its local state.
     pub fn gang_dir(&self) -> PathBuf {
         self.git_dir.join("gang")

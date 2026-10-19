@@ -241,6 +241,8 @@ pub fn merge_texts(
 
 /// Called by the merge driver: merges, keeps the versions when there are
 /// conflicts, and returns the merged text and whether conflicts remain.
+/// `ours` is always the user's side and `theirs` the upstream side; during
+/// a rebase the caller swaps git's versions to make it so.
 #[allow(clippy::too_many_arguments)]
 pub fn driver_merge(
     repo: &Repo,
@@ -258,12 +260,8 @@ pub fn driver_merge(
     let folder_meta = |text: &str| text.contains("folderAsset: yes");
     if path.ends_with(".meta") && base.trim().is_empty() && folder_meta(ours) && folder_meta(theirs)
     {
-        let git_dir = repo.git_dir();
-        let rebasing =
-            git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists();
-        let upstream = if rebasing { ours } else { theirs };
         let _ = clear(repo, path);
-        return Some((upstream.to_owned(), false));
+        return Some((theirs.to_owned(), false));
     }
     let guids = crate::semantic::guid_index(repo);
     let outcome = merge_texts(
@@ -280,6 +278,12 @@ pub fn driver_merge(
         let _ = clear(repo, path);
         return Some((outcome.text, false));
     }
+    let mut questions = outcome.questions;
+    if path.rsplit('/').next() == Some("TagManager.asset") {
+        for question in &mut questions {
+            explain_layer_clash(repo, question, theirs_name);
+        }
+    }
     let dir = dir(repo, path);
     if fs::create_dir_all(&dir).is_ok() {
         let _ = fs::write(dir.join("base"), base);
@@ -291,12 +295,58 @@ pub fn driver_merge(
                 path: path.to_owned(),
                 format,
                 theirs_name: theirs_name.to_owned(),
-                questions: outcome.questions,
+                questions,
                 answers: BTreeMap::new(),
             },
         );
     }
     Some((outcome.text, true))
+}
+
+/// The layer index of a TagManager `layers` conflict (`…/layers/[8]`).
+pub fn layer_index(question: &Question) -> Option<u32> {
+    let mut parts = question.id.rsplit('/');
+    let index = parts.next()?.strip_prefix('[')?.strip_suffix(']')?;
+    if parts.next()? != "layers" {
+        return None;
+    }
+    index.parse().ok()
+}
+
+/// Both sides gave a new layer the same number (DESIGN.md §14.2). The layer
+/// pass moves ours before merging; when it did not run (plain git), a
+/// plain "which name?" would silently move the other side's objects onto the
+/// chosen layer, so the question says so and points to `gang sync`.
+fn explain_layer_clash(repo: &Repo, question: &mut Question, theirs_name: &str) {
+    let Some(index) = layer_index(question) else {
+        return;
+    };
+    let filled = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.trim().is_empty());
+    if filled(&question.base) || !filled(&question.ours) || !filled(&question.theirs) {
+        // One layer renamed twice: the name is all there is to choose.
+        return;
+    }
+    let git_dir = repo.git_dir();
+    let operation = if repo.rebasing() {
+        "rebase"
+    } else if git_dir.join("CHERRY_PICK_HEAD").exists() {
+        "cherry-pick"
+    } else if git_dir.join("REVERT_HEAD").exists() {
+        "revert"
+    } else {
+        "merge"
+    };
+    let (ours, theirs) = (
+        question.ours.as_deref().unwrap_or_default().trim(),
+        question.theirs.as_deref().unwrap_or_default().trim(),
+    );
+    question.why = format!(
+        "Layer {index} is a new layer on both sides: {ours:?} for you, {theirs:?} for \
+         {theirs_name}. Objects on layer {index} mean {ours:?} in your work and {theirs:?} in \
+         theirs, so whichever name you pick, the other side's objects silently change layer. \
+         Better: `gang {operation} --abort`, then `gang sync`, which moves your layer to a free \
+         number together with everything that uses it."
+    );
 }
 
 /// Re-runs a pending merge with its answers.

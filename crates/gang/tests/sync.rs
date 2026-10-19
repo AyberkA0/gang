@@ -622,3 +622,216 @@ fn both_created_the_same_folder() {
             .contains(&format!("{:0>32}", "aa"))
     );
 }
+
+/// §1.2: during a rebase git's "ours" is the upstream commit. GANG's "mine"
+/// must still be the user's own value.
+#[test]
+fn same_property_when_rebasing_mine_is_still_mine() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("0", "3", ""));
+    assert_eq!(team.sync("alice", "alice jump").code, Some(0));
+    team.write("bob", SCENE, &scene("0", "4", ""));
+    let sync = team.gang("bob", &["sync", "--rebase", "-m", "bob jump"]);
+    assert_eq!(sync.code, Some(1), "{sync:?}");
+    // Bob's own value meanwhile, as in a merge.
+    assert_eq!(team.read("bob", SCENE), scene("0", "4", ""));
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert!(list.stdout.contains("Jump Height"), "{list:?}");
+
+    let bang = team.gang("bob", &["bang", "--prefer", "mine"]);
+    assert_eq!(bang.code, Some(0), "{bang:?}");
+    assert_eq!(team.read("bob", SCENE), scene("0", "4", ""));
+    let log = team
+        .sandbox
+        .run_in("bob", "git", &["log", "--format=%s", "-3"]);
+    assert_eq!(log.stdout, "bob jump\nalice jump\nstart\n", "{log:?}");
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+}
+
+#[test]
+fn same_property_when_rebasing_theirs_is_the_teammates() {
+    let team = Team::new();
+    team.gang("bob", &["config", "--project", "sync.strategy", "rebase"]);
+    team.write("alice", SCENE, &scene("0", "3", ""));
+    assert_eq!(team.sync("alice", "alice jump").code, Some(0));
+    team.write("bob", SCENE, &scene("0", "4", ""));
+    assert_eq!(team.sync("bob", "bob jump").code, Some(1));
+    let bang = team.gang("bob", &["bang", "--prefer", "theirs"]);
+    assert_eq!(bang.code, Some(0), "{bang:?}");
+    assert_eq!(team.read("bob", SCENE), scene("0", "3", ""));
+}
+
+#[test]
+fn code_conflicts_when_rebasing_keep_mine() {
+    let team = Team::new();
+    team.write(
+        "alice",
+        "Assets/Scripts/Player.cs",
+        "class Player\n{\n    int speed = 2;\n}\n",
+    );
+    assert_eq!(team.sync("alice", "speed 2").code, Some(0));
+    team.write(
+        "bob",
+        "Assets/Scripts/Player.cs",
+        "class Player\n{\n    int speed = 3;\n}\n",
+    );
+    assert_eq!(
+        team.gang("bob", &["sync", "--rebase", "-m", "speed 3"])
+            .code,
+        Some(1)
+    );
+    let bang = team.gang("bob", &["bang", "--prefer", "mine"]);
+    assert_eq!(bang.code, Some(0), "{bang:?}");
+    assert_eq!(
+        team.read("bob", "Assets/Scripts/Player.cs"),
+        "class Player\n{\n    int speed = 3;\n}\n"
+    );
+}
+
+/// A plain `gang rebase`: the deleting teammate is named after the upstream
+/// commit's author, and the user is "you".
+#[test]
+fn deleted_object_when_rebasing_names_the_teammate() {
+    let team = Team::new();
+    let without_player = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 101}\n  m_Name: Environment\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n";
+    team.write("alice", SCENE, without_player);
+    team.sandbox.run_in("alice", "git", &["add", SCENE]);
+    let commit = team.sandbox.run_in(
+        "alice",
+        "git",
+        &[
+            "commit",
+            "-q",
+            "--author=alice <alice@example.com>",
+            "-m",
+            "remove player",
+        ],
+    );
+    assert_eq!(commit.code, Some(0), "{commit:?}");
+    assert_eq!(team.gang("alice", &["push", "-q"]).code, Some(0));
+
+    let with_child = scene("0", "2.5", "--- !u!1 &300\nGameObject:\n  m_Component:\n  - component: {fileID: 301}\n  m_Name: Weapon\n--- !u!4 &301\nTransform:\n  m_GameObject: {fileID: 300}\n  m_Children: []\n  m_Father: {fileID: 201}\n")
+        .replace("  m_Children: []\n  m_Father: {fileID: 101}", "  m_Children:\n  - {fileID: 301}\n  m_Father: {fileID: 101}");
+    team.write("bob", SCENE, &with_child);
+    assert_eq!(team.gang("bob", &["save", "-m", "weapon"]).code, Some(0));
+    team.gang("bob", &["fetch", "-q"]);
+    let rebase = team.gang("bob", &["rebase", "origin/main"]);
+    assert_ne!(rebase.code, Some(0), "{rebase:?}");
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert!(
+        list.stdout
+            .contains("alice deleted Player. You added Weapon under it."),
+        "{list:?}"
+    );
+    assert_eq!(
+        team.gang("bob", &["bang", "--prefer", "mine"]).code,
+        Some(0)
+    );
+    let text = team.read("bob", SCENE);
+    assert!(
+        text.contains("m_Name: Weapon") && text.contains("m_Name: Player"),
+        "{text}"
+    );
+}
+
+/// L3: Alice and Bob both add layer 8; Bob brings Alice's work in with
+/// `command` instead of `gang sync`.
+fn layer_clash_through(command: &[&str]) -> (Team, common::Outcome) {
+    let team = Team::new();
+    base_tags(&team, &["alice", "bob"], None);
+    assert_eq!(team.sync("alice", "tags").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+    base_tags(&team, &["alice"], Some("Pickup"));
+    assert_eq!(team.sync("alice", "Pickup layer").code, Some(0));
+
+    base_tags(&team, &["bob"], Some("UI3D"));
+    let scene_text = team.read("bob", SCENE) + &object_on_layer(600, "Panel", 8);
+    team.write("bob", SCENE, &scene_text);
+    assert_eq!(
+        team.gang("bob", &["save", "-m", "UI3D layer"]).code,
+        Some(0)
+    );
+    team.gang("bob", &["fetch", "-q"]);
+    let outcome = team.gang("bob", command);
+    (team, outcome)
+}
+
+fn assert_layer_moved(team: &Team, outcome: &common::Outcome) {
+    assert_eq!(outcome.code, Some(0), "{outcome:?}");
+    assert!(
+        outcome.stdout.contains("Moving \"UI3D\" to layer 9"),
+        "{outcome:?}"
+    );
+    let names = gang_core_layer_names(&team.read("bob", "ProjectSettings/TagManager.asset"));
+    assert_eq!((names[8].as_str(), names[9].as_str()), ("Pickup", "UI3D"));
+    let text = team.read("bob", SCENE);
+    let panel = text.split("m_Name: Panel").next().unwrap();
+    assert!(panel.trim_end().ends_with("m_Layer: 9"), "{text}");
+    let status = team
+        .sandbox
+        .run_in("bob", "git", &["status", "--porcelain"]);
+    assert_eq!(status.stdout, "", "{status:?}");
+}
+
+#[test]
+fn layer_clash_is_remapped_by_pull() {
+    let (team, pull) = layer_clash_through(&["pull", "--no-rebase", "--no-edit"]);
+    assert_layer_moved(&team, &pull);
+}
+
+#[test]
+fn layer_clash_is_remapped_by_pull_rebase() {
+    let (team, pull) = layer_clash_through(&["pull", "--rebase"]);
+    assert_layer_moved(&team, &pull);
+    let log = team
+        .sandbox
+        .run_in("bob", "git", &["log", "--format=%s", "-2"]);
+    assert_eq!(
+        log.stdout, "gang: move layer UI3D from 8 to 9\nUI3D layer\n",
+        "{log:?}"
+    );
+    let rev = |rev: &str| {
+        team.sandbox
+            .run_in("bob", "git", &["rev-parse", rev])
+            .stdout
+    };
+    assert_eq!(rev("HEAD~2"), rev("origin/main"), "not rebased");
+}
+
+#[test]
+fn layer_clash_is_remapped_by_rebase() {
+    let (team, rebase) = layer_clash_through(&["rebase", "origin/main"]);
+    assert_layer_moved(&team, &rebase);
+}
+
+#[test]
+fn layer_clash_is_remapped_by_sync_rebase() {
+    let (team, sync) = layer_clash_through(&["sync", "--rebase"]);
+    assert!(sync.stdout.contains("Pushed"), "{sync:?}");
+    assert_layer_moved(&team, &sync);
+}
+
+#[test]
+fn layer_clash_is_remapped_by_cherry_pick() {
+    // origin/main is Alice's merge of Bob's work; its first parent is Pickup.
+    let (team, pick) = layer_clash_through(&["cherry-pick", "origin/main^"]);
+    assert_layer_moved(&team, &pick);
+}
+
+/// L3 with plain git: the pass cannot run, so the question explains what
+/// either name would do and points to `gang sync`.
+#[test]
+fn layer_clash_through_plain_git_explains_itself() {
+    let (team, _) = layer_clash_through(&["status"]);
+    let pull = team
+        .sandbox
+        .run_in("bob", "git", &["pull", "--no-rebase", "--no-edit"]);
+    assert_ne!(pull.code, Some(0), "{pull:?}");
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert!(list.stdout.contains("Layers[8]"), "{list:?}");
+    assert!(
+        list.stdout.contains("silently change layer") && list.stdout.contains("`gang sync`"),
+        "{list:?}"
+    );
+    assert!(list.stdout.contains("gang merge --abort"), "{list:?}");
+}

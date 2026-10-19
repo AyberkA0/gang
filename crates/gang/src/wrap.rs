@@ -62,27 +62,12 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
                 .args
                 .iter()
                 .any(|a| a == "--abort" || a == "--quit" || a == "--skip");
-            if name == "merge" && !aborting && setup::is_gang_repo(&repo) {
-                let args = strings(&invocation.args);
-                let revs = positionals(
-                    &args,
-                    &[
-                        "-m",
-                        "-F",
-                        "-s",
-                        "-X",
-                        "--strategy",
-                        "--strategy-option",
-                        "--file",
-                    ],
-                );
-                if let [rev] = revs.as_slice() {
-                    let auto_remap = gang_core::config::Config::load(repo.root())
-                        .map(|c| c.layers.auto_remap)
-                        .unwrap_or(true);
-                    if auto_remap && !has(&args, &["--continue", "--no-commit", "--squash"]) {
-                        crate::sync_cmd::pre_merge(&repo, rev)?;
-                    }
+            if !aborting && setup::is_gang_repo(&repo) {
+                let auto_remap = Config::load(repo.root())
+                    .map(|c| c.layers.auto_remap)
+                    .unwrap_or(true);
+                if auto_remap {
+                    layer_pass(invocation, &repo, name)?;
                 }
             }
             let code = git_command(invocation, &invocation.args)?;
@@ -98,6 +83,171 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
         }
         _ => git_command(invocation, &invocation.args),
     }
+}
+
+/// The layer pass (DESIGN.md §14.2) before a command that brings in other
+/// commits: `merge`, `pull` (merge or rebase), `rebase` and `cherry-pick`.
+/// Without it a layer clash only reaches `gang bang` as a question about a
+/// name, and the other side's objects silently change layer (L3).
+fn layer_pass(invocation: &Invocation, repo: &Repo, name: &str) -> Result<()> {
+    let args = strings(&invocation.args);
+    let resuming = ["--continue", "--edit-todo", "--show-current-patch"];
+    if has(&args, &resuming) {
+        return Ok(());
+    }
+    match name {
+        "merge" => {
+            let revs = positionals(
+                &args,
+                &[
+                    "-m",
+                    "-F",
+                    "-s",
+                    "-X",
+                    "--strategy",
+                    "--strategy-option",
+                    "--file",
+                ],
+            );
+            if let [rev] = revs.as_slice() {
+                if !has(&args, &["--no-commit", "--squash"]) {
+                    crate::sync_cmd::pre_merge(repo, rev, false)?;
+                }
+            }
+        }
+        "rebase" => {
+            // `--onto` and `--root` replay onto something else than the
+            // upstream, and a second positional switches branches first.
+            if has(&args, &["--onto", "--root"]) || args.iter().any(|a| a.starts_with("--onto=")) {
+                return Ok(());
+            }
+            let revs = positionals(
+                &args,
+                &[
+                    "-s",
+                    "-X",
+                    "--strategy",
+                    "--strategy-option",
+                    "-x",
+                    "--exec",
+                ],
+            );
+            let upstream = match revs.as_slice() {
+                [rev] => rev.clone(),
+                [] => match configured_upstream(repo)? {
+                    Some(rev) => rev,
+                    None => return Ok(()),
+                },
+                _ => return Ok(()),
+            };
+            crate::sync_cmd::pre_merge(repo, &upstream, true)?;
+        }
+        "pull" => {
+            if has(&args, &["--ff-only"]) {
+                return Ok(());
+            }
+            let Some(upstream) = fetch_for_pull(invocation, repo, &args)? else {
+                return Ok(());
+            };
+            crate::sync_cmd::pre_merge(repo, &upstream, pull_rebases(repo, &args)?)?;
+        }
+        "cherry-pick" => {
+            if has(&args, &["-n", "--no-commit"]) {
+                return Ok(());
+            }
+            let commits = positionals(
+                &args,
+                &[
+                    "-m",
+                    "--mainline",
+                    "-s",
+                    "-X",
+                    "--strategy",
+                    "--strategy-option",
+                ],
+            );
+            for commit in commits {
+                // A range picks up to its last commit.
+                let tip = commit.rsplit("..").next().unwrap_or(&commit).to_owned();
+                if !tip.is_empty() {
+                    crate::sync_cmd::pre_merge(repo, &tip, false)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The current branch's upstream (`origin/main`), if it has one.
+fn configured_upstream(repo: &Repo) -> Result<Option<String>> {
+    Ok(repo
+        .try_run(["rev-parse", "--abbrev-ref", "@{upstream}"])?
+        .map(|r| r.trim().to_owned())
+        .filter(|r| !r.is_empty()))
+}
+
+/// Fetches what `git pull <args>` would merge, and names it: the branch's
+/// upstream for a plain pull, `FETCH_HEAD` otherwise.
+fn fetch_for_pull(invocation: &Invocation, repo: &Repo, args: &[String]) -> Result<Option<String>> {
+    let refs = positionals(
+        args,
+        &[
+            "-s",
+            "-X",
+            "--strategy",
+            "--strategy-option",
+            "-j",
+            "--jobs",
+            "--depth",
+            "--upload-pack",
+        ],
+    );
+    let mut fetch: Vec<OsString> = invocation.git_globals.clone();
+    fetch.extend(["fetch".into(), "-q".into()]);
+    fetch.extend(refs.iter().map(OsString::from));
+    let output = std::process::Command::new("git")
+        .args(&fetch)
+        .current_dir(repo.root())
+        .output()?;
+    if !output.status.success() {
+        // Let the pull itself report the problem.
+        return Ok(None);
+    }
+    if refs.is_empty() {
+        if let Some(upstream) = configured_upstream(repo)? {
+            return Ok(Some(upstream));
+        }
+    }
+    Ok(repo
+        .try_run(["rev-parse", "-q", "--verify", "FETCH_HEAD^{commit}"])?
+        .map(|_| "FETCH_HEAD".to_owned()))
+}
+
+/// Whether `git pull <args>` rebases: `--rebase`, or the configuration.
+fn pull_rebases(repo: &Repo, args: &[String]) -> Result<bool> {
+    let from_value = |value: &str| !matches!(value, "false" | "no" | "off" | "0");
+    for arg in args.iter().rev() {
+        match arg.as_str() {
+            "-r" | "--rebase" => return Ok(true),
+            "--no-rebase" => return Ok(false),
+            _ => {
+                if let Some(value) = arg.strip_prefix("--rebase=") {
+                    return Ok(from_value(value));
+                }
+            }
+        }
+    }
+    let branch = repo
+        .try_run(["symbolic-ref", "--short", "-q", "HEAD"])?
+        .map(|b| b.trim().to_owned())
+        .unwrap_or_default();
+    for key in [format!("branch.{branch}.rebase"), "pull.rebase".to_owned()] {
+        if let Some(value) = repo.config_get(&key)? {
+            return Ok(from_value(value.trim()));
+        }
+    }
+    Ok(false)
 }
 
 /// After a command that merges: offer `gang bang` when conflicts are left.

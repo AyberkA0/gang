@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use gang_core::invocation::Invocation;
 use gang_core::managed::{self, Kind};
 use gang_core::repo::Repo;
-use gang_core::{config, git, store};
+use gang_core::{config, git, layers, store};
 
 /// `gang merge-driver <unity|ignore> <base> <ours> <theirs> [path]`: git's
 /// merge driver. Writes the result to `<ours>`; exits non-zero on conflicts.
@@ -64,23 +64,46 @@ fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) 
         store::Format::Unity
     };
     let theirs_name = std::env::var("GANG_THEIRS_NAME").unwrap_or_else(|_| other_side_name(&repo));
-    match store::driver_merge(&repo, path, format, &b, &o, &t, &rules, &theirs_name) {
+    // During a rebase git's "ours" is the upstream commit and "theirs" the
+    // user's own commit being replayed. GANG's "mine" is always the user's
+    // side, so the versions swap; the result still goes to git's <ours>.
+    let rebasing = repo.rebasing();
+    let (b, mine, upstream) = if rebasing {
+        // A layer the pass moved before this rebase: the user's commits are
+        // replayed with it at its new number (DESIGN.md §14.2).
+        let replay = |text: String| layers::replay_moves(&repo, path, &text).unwrap_or(text);
+        (replay(b), replay(t), o)
+    } else {
+        (b, o, t)
+    };
+    match store::driver_merge(
+        &repo,
+        path,
+        format,
+        &b,
+        &mine,
+        &upstream,
+        &rules,
+        &theirs_name,
+    ) {
         Some((merged, conflicts)) => {
             fs::write(ours, merged)?;
             Ok(if conflicts { 1 } else { 0 })
         }
+        None if rebasing => text_merge_labelled(base, ours, theirs, ["upstream", "yours"]),
         None => text_merge(base, ours, theirs),
     }
 }
 
-/// A name for the other side of the merge: the merged branch's author.
+/// A name for the other side of the merge: the merged branch's author, or
+/// during a rebase the author of the upstream commit it replays onto.
 fn other_side_name(repo: &gang_core::repo::Repo) -> String {
-    for head in [
-        "MERGE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD",
-        "REBASE_HEAD",
-    ] {
+    let onto = repo.rebase_onto();
+    let heads: Vec<&str> = match &onto {
+        Some(onto) => vec![onto.as_str()],
+        None => vec!["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"],
+    };
+    for head in heads {
         if let Ok(Some(name)) = repo.try_run(["log", "-1", "--format=%an", head]) {
             let name = name.trim();
             if !name.is_empty() {
@@ -92,14 +115,18 @@ fn other_side_name(repo: &gang_core::repo::Repo) -> String {
 }
 
 fn text_merge(base: &str, ours: &str, theirs: &str) -> Result<i32> {
+    text_merge_labelled(base, ours, theirs, ["ours", "theirs"])
+}
+
+fn text_merge_labelled(base: &str, ours: &str, theirs: &str, labels: [&str; 2]) -> Result<i32> {
     let code = git::run_inherited([
         "merge-file",
         "-L",
-        "ours",
+        labels[0],
         "-L",
         "base",
         "-L",
-        "theirs",
+        labels[1],
         ours,
         base,
         theirs,

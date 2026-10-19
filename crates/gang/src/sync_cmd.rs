@@ -109,16 +109,11 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
                 if let Some(code) = editor_guard(invocation, &repo, upstream, &config)? {
                     return Ok(code);
                 }
+                let rebase = args.rebase || config.sync.strategy == "rebase";
                 if config.layers.auto_remap {
-                    pre_merge(&repo, upstream)?;
+                    pre_merge(&repo, upstream, rebase)?;
                 }
-                let code = merge(
-                    invocation,
-                    &repo,
-                    upstream,
-                    args.rebase || config.sync.strategy == "rebase",
-                    incoming,
-                )?;
+                let code = merge(invocation, &repo, upstream, rebase, incoming)?;
                 if code != 0 {
                     return Ok(code);
                 }
@@ -200,11 +195,16 @@ fn push_failed(stderr: &str, outgoing: usize) {
     }
 }
 
-/// Passes that run before merging (DESIGN.md §14.2): the layer remap.
-pub fn pre_merge(repo: &Repo, upstream: &str) -> Result<()> {
+/// Passes that run before merging, rebasing onto or cherry-picking
+/// `upstream` (DESIGN.md §14.2): the layer remap.
+pub fn pre_merge(repo: &Repo, upstream: &str, rebase: bool) -> Result<()> {
+    gang_core::layers::forget_rebase(repo);
     let Some(report) = gang_core::layers::run(repo, upstream)? else {
         return Ok(());
     };
+    if rebase {
+        gang_core::layers::remember_for_rebase(repo, upstream, &report)?;
+    }
     for m in &report.moves {
         if m.follow {
             println!("Layer moved: {}.", m.taken_by);

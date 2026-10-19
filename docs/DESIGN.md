@@ -732,7 +732,11 @@ Violations become conflicts, never silent output:
 
 Layers are referenced by number. When two people give the same layer index different names, GANG keeps the version already on the remote and moves the local one — and everything that uses it — to a free layer, then commits that change. No question is asked.
 
-**When it runs:** as a pre-merge pass of `gang sync` and `gang merge <branch>`, before git merges. It needs a clean working tree. `sync` requires a clean working tree (it offers `gang save` first), so the remap only touches committed work.
+**When it runs:** before git brings in other commits, from every GANG command that does: `gang sync` (merge or rebase), `gang merge <branch>`, `gang pull` (merge or `--rebase`; GANG fetches first to see what will come in), `gang rebase [<upstream>]` and `gang cherry-pick <commit>…`. It does not run for `rebase --onto`/`--root`, `merge --squash`/`--no-commit`, `cherry-pick -n`, `pull --ff-only` or `revert`. It needs a clean working tree. `sync` requires a clean working tree (it offers `gang save` first), so the remap only touches committed work.
+
+**Rebase:** the remap commit sits on top of our commits, so a rebase replays it last. Every earlier commit that added the layer would clash with the upstream name again. Before a rebase the pass records the moved layers in `.git/gang/rebase-layers.json` (with the commit the rebase goes onto), and while that rebase runs the merge driver replays our side of `TagManager.asset` with the layer already at its new number, so it merges cleanly. Our earlier commits keep the old number on objects until the remap commit, which moves them; the end result is the same as with a merge.
+
+**Without the pass** (plain `git pull`, or `layers.auto_remap = false`): the clash reaches `gang bang` as a TagManager `Layers[i]` question. Because either name would silently move the other side's objects onto it, the question says so and suggests aborting and running `gang sync` instead of answering mine/theirs. A layer renamed on both sides (`B[i]` non-empty) is a plain name question.
 
 **Detection** (B = merge base, O = ours, T = theirs, for layers 8–31):
 
@@ -780,7 +784,7 @@ Gang-Remap: layer 8 -> 9
 
 The merge then proceeds and `TagManager.asset` merges without a conflict. Whoever pushes first keeps the index; the others' GANG moves their layer when they sync. The sync output always ends the remap with the review list, or "Nothing needs review."
 
-Known gaps (see [HARDENING.md](HARDENING.md) §1.1): the pass does not run for `pull`, `rebase` or `cherry-pick` yet, collision matrices are not rewritten, and only the C# patterns above are recognized.
+Known gaps (see [HARDENING.md](HARDENING.md) §1.1): collision matrices are not rewritten, and only the C# patterns above are recognized.
 
 ### 14.3 Packages
 

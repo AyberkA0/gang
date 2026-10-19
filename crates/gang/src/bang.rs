@@ -475,7 +475,15 @@ fn resolve_plain_file(
     let Some(text) = text else {
         return resolve_binary(repo, path, prefer, n, total);
     };
-    let hunks = parse_hunks(&text);
+    let mut hunks = parse_hunks(&text);
+    if repo.rebasing() {
+        // During a rebase the first side of a hunk is the upstream commit.
+        for part in &mut hunks {
+            if let Part::Hunk { ours, theirs } = part {
+                std::mem::swap(ours, theirs);
+            }
+        }
+    }
     let mut out = String::new();
     for (i, part) in hunks.iter().enumerate() {
         match part {
@@ -537,9 +545,15 @@ fn resolve_binary(
     n: usize,
     total: usize,
 ) -> Result<bool> {
+    // git's --ours / stage 2 is the upstream commit during a rebase.
+    let (mine, theirs, theirs_stage) = if repo.rebasing() {
+        ("--theirs", "--ours", 2)
+    } else {
+        ("--ours", "--theirs", 3)
+    };
     let side = match prefer {
-        Some("mine") => "--ours",
-        Some(_) => "--theirs",
+        Some("mine") => mine,
+        Some(_) => theirs,
         None => {
             println!();
             println!(
@@ -552,11 +566,13 @@ fn resolve_binary(
             loop {
                 match read_key()? {
                     'q' => return Ok(false),
-                    'm' => break "--ours",
-                    't' => break "--theirs",
+                    'm' => break mine,
+                    't' => break theirs,
                     'a' => {
                         let copy = format!("{path}.theirs");
-                        let bytes = repo.output(["show", &format!(":3:{path}")])?.stdout;
+                        let bytes = repo
+                            .output(["show", &format!(":{theirs_stage}:{path}")])?
+                            .stdout;
                         std::fs::write(repo.root().join(&copy), bytes)?;
                         println!("Saved theirs as {copy}. Compare, then choose.");
                     }

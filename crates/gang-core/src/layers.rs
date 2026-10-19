@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use unity_yaml::{File, Item, Map, Scalar, Value};
 
 use crate::repo::{Repo, split_nul};
@@ -33,6 +34,26 @@ pub struct Report {
     pub updated: Vec<String>,
     /// Places a person should look at.
     pub review: Vec<String>,
+    /// Our layers that moved in a TagManager, for a rebase to replay.
+    pub renamed: Vec<Renamed>,
+}
+
+/// One of our layers moved to a free number in a TagManager.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Renamed {
+    pub path: String,
+    pub name: String,
+    pub from: u32,
+    pub to: u32,
+    /// What layer `from` was in the merge base.
+    pub previous: String,
+}
+
+/// The moves made before a rebase onto `onto` (`.git/gang/rebase-layers.json`).
+#[derive(Debug, Serialize, Deserialize)]
+struct Replay {
+    onto: String,
+    moves: Vec<Renamed>,
 }
 
 fn tag_manager(project: &UnityProject) -> String {
@@ -174,6 +195,13 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
                     let previous = base_names.get(m.from as usize).cloned().unwrap_or_default();
                     set_layer(items, m.from as usize, &previous);
                     set_layer(items, m.to as usize, &m.name);
+                    report.renamed.push(Renamed {
+                        path: tags_path.clone(),
+                        name: m.name.clone(),
+                        from: m.from,
+                        to: m.to,
+                        previous,
+                    });
                 }
             }
             std::fs::write(repo.root().join(&tags_path), file.to_text())?;
@@ -502,6 +530,7 @@ pub fn run(repo: &Repo, upstream: &str) -> Result<Option<Report>> {
         total.moves.extend(report.moves);
         total.updated.extend(report.updated);
         total.review.extend(report.review);
+        total.renamed.extend(report.renamed);
     }
     if repo
         .run(["status", "--porcelain", "--untracked-files=no"])?
@@ -551,6 +580,66 @@ pub fn run(repo: &Repo, upstream: &str) -> Result<Option<Report>> {
     repo.run(["add", "-u"])?;
     repo.run(["commit", "-q", "--no-verify", "-m", &message])?;
     Ok(Some(total))
+}
+
+fn replay_path(repo: &Repo) -> std::path::PathBuf {
+    repo.gang_dir().join("rebase-layers.json")
+}
+
+/// Before a rebase onto `onto`: remembers the layers the pass moved.
+///
+/// A rebase replays our commits one by one, and the remap commit comes
+/// last; every earlier commit that added the layer would clash with the
+/// upstream name again. The merge driver replays those commits with the
+/// layer already at its new number (`replay_moves`), so the TagManager
+/// merges cleanly; the objects follow in the remap commit.
+pub fn remember_for_rebase(repo: &Repo, onto: &str, report: &Report) -> Result<()> {
+    forget_rebase(repo);
+    if report.renamed.is_empty() {
+        return Ok(());
+    }
+    let onto = repo.run(["rev-parse", &format!("{onto}^{{commit}}")])?;
+    let replay = Replay {
+        onto: onto.trim().to_owned(),
+        moves: report.renamed.clone(),
+    };
+    std::fs::create_dir_all(repo.gang_dir())?;
+    std::fs::write(replay_path(repo), serde_json::to_string_pretty(&replay)?)?;
+    Ok(())
+}
+
+pub fn forget_rebase(repo: &Repo) {
+    let _ = std::fs::remove_file(replay_path(repo));
+}
+
+/// During a rebase the pass prepared: `text` (a version of the TagManager
+/// at `path` from our side) with our moved layers at their new numbers.
+/// `None` when nothing applies.
+pub fn replay_moves(repo: &Repo, path: &str, text: &str) -> Option<String> {
+    let replay: Replay =
+        serde_json::from_str(&std::fs::read_to_string(replay_path(repo)).ok()?).ok()?;
+    if repo.rebase_onto()? != replay.onto {
+        return None;
+    }
+    let moves: Vec<&Renamed> = replay.moves.iter().filter(|m| m.path == path).collect();
+    if moves.is_empty() {
+        return None;
+    }
+    let names = layer_names(text)?;
+    let mut file = unity_yaml::parse(text).ok()?;
+    let items = file.docs[0]
+        .body_mut()
+        .and_then(|b| b.get_mut("layers"))
+        .and_then(Value::as_seq_mut)?;
+    let mut changed = false;
+    for m in moves {
+        if names.get(m.from as usize) == Some(&m.name) {
+            set_layer(items, m.from as usize, &m.previous);
+            set_layer(items, m.to as usize, &m.name);
+            changed = true;
+        }
+    }
+    changed.then(|| file.to_text())
 }
 
 #[cfg(test)]
