@@ -238,7 +238,7 @@ The merge driver is registered through `.gitattributes`, so the merge part of **
 | `gang locks [--tree] [--json]` | List locks |
 | `gang tree <file>[::<object>] [--depth n]` | Print the object hierarchy of a scene or prefab with object paths and fileIDs |
 | `gang ignore add <rule> [--local]` · `update` · `check <path>` · `doctor` | Managed ignore (§17) |
-| `gang doctor [--fix]` | Project health: metas, GUIDs, references, Unity settings, LFS, hotspots, workflows |
+| `gang doctor [--fix]` | Project health: metas, GUIDs, references, Unity settings, LFS, layer numbers in code, hotspots, workflows |
 | `gang auth login\|logout\|status` | GitHub authentication |
 | `gang git <args>` | Escape hatch: plain git with no layers (auth is still provided) |
 
@@ -758,8 +758,9 @@ Layers are referenced by number. When two people give the same layer index diffe
 | | Prefab overrides: `m_Modifications` entries with `propertyPath: m_Layer` or a `m_Bits` path |
 | | Script `int` fields whose name contains "layer" and whose value is `i` (heuristic, listed in the report) |
 | `DynamicsManager.asset`, `Physics2DSettings.asset` | Collision matrix: listed under "Needs review" (the matrix encoding is not rewritten automatically yet) |
-| C# (`Assets/**/*.cs`, only lines added by our commits) | Recognized patterns: `.layer = i`, `.layer == i` / `!=`, `1 << i`, `const` declarations whose name contains "layer". Name-based calls (`LayerMask.NameToLayer("…")`, `LayerMask.GetMask("…")`) need no change |
-| C#, unrecognized | A literal `i` on a line that mentions "layer" is **reported**, not changed |
+| C# (`Assets/**/*.cs`, only lines added by our commits) | Layers: `.layer = i`, `.layer == i` / `!=`, `i == x.layer`, `case i:` in a `switch` on a layer, `1 << i` (`1u`, `1L`), assignments to names that say "layer" (`UI3DLayer = i`; not `player`, sorting/rendering layers, NavMesh areas, counts), members of enums named for layers, the layer arguments of `Physics.IgnoreLayerCollision` / `GetIgnoreLayerCollision`, `Physics2D.Get/SetLayerCollisionMask` and `LayerMask.LayerToName`, and `const` / `static readonly` numbers and enum members whose name is used as a layer elsewhere in the same file (`go.layer = Interact`) |
+| | Single-layer masks (`1 << i` as a number: `256`, `0x100`, `0b…`, rewritten in the same base): assigned to a `LayerMask` or a name containing "mask", passed as `layerMask:`, passed to `Physics.*` / `Physics2D.*` right after a distance (`100f`, `Mathf.Infinity`, `maxDistance`) or written in hex there, and constants used as masks. Name-based calls (`LayerMask.NameToLayer("…")`, `LayerMask.GetMask("…")`) need no change |
+| C#, everything else | Every other whole number `i` or `1 << i` (any base) in code on those lines is **listed under "Needs review"**, whatever the line says, with why it was left (`8 is stored in l, which is used as a layer but is not a constant`). So are masks with more bits that include `i` (where used as a mask, or written in hex/binary) and members of layer enums that are `i` by their position. Strings, comments and preprocessor lines are skipped |
 
 **Commit:** a dedicated commit on our side, authored by the user:
 
@@ -784,7 +785,7 @@ Gang-Remap: layer 8 -> 9
 
 The merge then proceeds and `TagManager.asset` merges without a conflict. Whoever pushes first keeps the index; the others' GANG moves their layer when they sync. The sync output always ends the remap with the review list, or "Nothing needs review."
 
-Known gaps (see [HARDENING.md](HARDENING.md) §1.1): collision matrices are not rewritten, and only the C# patterns above are recognized.
+Known gaps (see [HARDENING.md](HARDENING.md) §1.1): collision matrices are not rewritten. In C#, only the patterns above are rewritten; the review list catches every literal, but some uses have no literal on an added line and cannot be found by reading our changes: values computed at run time (`baseLayer + 1`, `1 << (i + 8)`), compiled DLLs and packages, layers that arrive as data at run time (JSON, ScriptableObjects, save files, server config), constants declared in another file, and code our commits did not add. Name-based calls avoid all of these, so `gang doctor` lists scripts under `Assets/` that use user layers by number and suggests `LayerMask.NameToLayer("…")` / `LayerMask.GetMask("…")`.
 
 ### 14.3 Packages
 

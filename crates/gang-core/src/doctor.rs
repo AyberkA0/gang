@@ -231,9 +231,49 @@ pub fn run(repo: &Repo) -> Result<Vec<Check>> {
         }
     }
 
+    // Layer numbers in code.
+    checks.extend(layer_numbers(repo, &projects, &tracked));
+
     // Hotspots.
     checks.extend(hotspots(repo)?);
     Ok(checks)
+}
+
+/// Scripts that use layers by number. The layer remap rewrites what it
+/// recognizes and lists the rest, but names never need either.
+fn layer_numbers(repo: &Repo, projects: &[UnityProject], tracked: &[String]) -> Vec<Check> {
+    let assets: Vec<String> = projects.iter().map(|p| p.join("Assets/")).collect();
+    let mut checks = Vec::new();
+    for path in tracked
+        .iter()
+        .filter(|p| p.ends_with(".cs") && assets.iter().any(|a| p.starts_with(a.as_str())))
+    {
+        let Some(source) = semantic::worktree(repo, path) else {
+            continue;
+        };
+        let lines = gang_csharp::numeric_layer_uses(&source);
+        if lines.is_empty() {
+            continue;
+        }
+        let mut list: Vec<String> = lines.iter().take(10).map(usize::to_string).collect();
+        if lines.len() > 10 {
+            list.push("…".to_owned());
+        }
+        checks.push(check(
+            Level::Warn,
+            "layers",
+            format!(
+                "{path} uses layers by number (line{} {})",
+                if lines.len() == 1 { "" } else { "s" },
+                list.join(", ")
+            ),
+            Some(
+                "use LayerMask.NameToLayer(\"…\") for a layer and LayerMask.GetMask(\"…\") for a mask, so the code keeps working when a layer moves",
+            ),
+            false,
+        ));
+    }
+    checks
 }
 
 fn name(project: &UnityProject) -> String {

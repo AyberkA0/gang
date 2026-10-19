@@ -26,6 +26,14 @@ fn messy() -> Sandbox {
         "fileFormatVersion: 2\nguid: 0000000000000000000000000000aaa3\n",
     );
     sandbox.write(
+        "Assets/Scripts/Hits.cs",
+        "class Hits\n{\n    void Hit(GameObject go) { go.layer = 8; }\n}\n",
+    );
+    sandbox.write(
+        "Assets/Scripts/Hits.cs.meta",
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000aaa5\n",
+    );
+    sandbox.write(
         "Assets/Scripts.meta",
         "fileFormatVersion: 2\nguid: 0000000000000000000000000000aaa4\nfolderAsset: yes\n",
     );
@@ -46,6 +54,8 @@ fn doctor_finds_and_fixes_problems() {
         "Assets/Old.png.meta has no asset",
         "Assets/NoMeta.txt has no .meta",
         "Build Settings lists Assets/Scenes/Gone.unity",
+        "Assets/Scripts/Hits.cs uses layers by number (line 3)",
+        "LayerMask.NameToLayer(\"…\")",
     ] {
         assert!(
             doctor.stdout.contains(expected),
