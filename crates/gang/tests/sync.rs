@@ -283,9 +283,8 @@ fn tag_manager(layers: &[&str]) -> String {
     text
 }
 
-#[test]
-fn layer_collision_is_remapped_automatically() {
-    let team = Team::new();
+/// Alice pushes layer 8 as "Pickup"; Bob names layer 8 "UI3D" (not synced).
+fn clash_on_layer_8(team: &Team) {
     let base_layers = [
         "Default",
         "TransparentFX",
@@ -323,6 +322,12 @@ fn layer_collision_is_remapped_automatically() {
         "ProjectSettings/TagManager.asset",
         &tag_manager(&bob_layers),
     );
+}
+
+#[test]
+fn layer_collision_is_remapped_automatically() {
+    let team = Team::new();
+    clash_on_layer_8(&team);
     team.write(
         "bob",
         SCENE,
@@ -352,6 +357,77 @@ fn layer_collision_is_remapped_automatically() {
         log.stdout.contains("gang: move layer UI3D from 8 to 9"),
         "{log:?}"
     );
+}
+
+/// Layer numbers in code: recognized forms move, everything else that may
+/// be the layer is listed for review.
+#[test]
+fn layer_numbers_in_code_move_or_are_listed() {
+    let team = Team::new();
+    clash_on_layer_8(&team);
+    team.write(
+        "bob",
+        "Assets/Scripts/Menu.cs",
+        "\
+using UnityEngine;
+enum Layers
+{
+    Default = 0,
+    UI3D = 8,
+}
+class Menu : MonoBehaviour
+{
+    const int Interact = 8;
+    LayerMask hits = 256;
+    void Start()
+    {
+        gameObject.layer = Interact;
+        Physics.Raycast(transform.position, Vector3.forward, 100f, 0x100);
+        int l = 8;
+        gameObject.layer = l;
+        int ui = LayerMask.NameToLayer(\"UI3D\"); // layer 8
+    }
+}
+",
+    );
+    team.write(
+        "bob",
+        "Assets/Scripts/Menu.cs.meta",
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000cccc\n",
+    );
+    let sync = team.sync("bob", "UI3D layer");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    let script = team.read("bob", "Assets/Scripts/Menu.cs");
+    for expected in [
+        "    UI3D = 9,",
+        "const int Interact = 9;",
+        "LayerMask hits = 512;",
+        "100f, 0x200);",
+        "int l = 8;",
+        "NameToLayer(\"UI3D\"); // layer 8",
+    ] {
+        assert!(script.contains(expected), "{expected}\n{script}");
+    }
+    assert!(
+        sync.stdout.contains(
+            "Assets/Scripts/Menu.cs:15: 8 is stored in l, which is used as a layer but is not a constant; left as is — please review"
+        ),
+        "{sync:?}"
+    );
+    // The remap commit lists both.
+    let log = team
+        .sandbox
+        .run_in("bob", "git", &["log", "--format=%B"])
+        .stdout;
+    for line in [
+        "- Assets/Scripts/Menu.cs:5\n",
+        "- Assets/Scripts/Menu.cs:9\n",
+        "- Assets/Scripts/Menu.cs:10\n",
+        "- Assets/Scripts/Menu.cs:14\n",
+        "- Assets/Scripts/Menu.cs:15: 8 is stored in l",
+    ] {
+        assert!(log.contains(line), "{line}\n{log}");
+    }
 }
 
 fn gang_core_layer_names(text: &str) -> Vec<String> {

@@ -276,11 +276,10 @@ pub fn apply(repo: &Repo, base: &str, project: &UnityProject, moves: &[Move]) ->
                 for line in &result.changed {
                     report.updated.push(format!("{path}:{line}"));
                 }
-                for line in &result.review {
-                    report.review.push(format!(
-                        "{path}:{line}: the number {} next to \"layer\"",
-                        m.from
-                    ));
+                for review in &result.review {
+                    report
+                        .review
+                        .push(format!("{path}:{}: {}", review.line, review.message));
                 }
                 text = result.text;
             }
