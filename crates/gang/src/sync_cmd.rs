@@ -111,7 +111,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
                 }
                 let rebase = args.rebase || config.sync.strategy == "rebase";
                 if config.layers.auto_remap {
-                    pre_merge(&repo, upstream, rebase)?;
+                    pre_merge(&repo, upstream, rebase, invocation.options.ignore_editor)?;
                 }
                 let code = merge(invocation, &repo, upstream, rebase, incoming)?;
                 if code != 0 {
@@ -197,8 +197,32 @@ fn push_failed(stderr: &str, outgoing: usize) {
 
 /// Passes that run before merging, rebasing onto or cherry-picking
 /// `upstream` (DESIGN.md §14.2): the layer remap.
-pub fn pre_merge(repo: &Repo, upstream: &str, rebase: bool) -> Result<()> {
+pub fn pre_merge(repo: &Repo, upstream: &str, rebase: bool, ignore_editor: bool) -> Result<()> {
     gang_core::layers::forget_rebase(repo);
+    // Unity keeps the project settings in memory: a layer moved under it
+    // would be written back the old way at its next save.
+    if !ignore_editor {
+        let open = unity::find_projects(repo.root())
+            .iter()
+            .any(|p| unity::is_editor_open(&p.path(repo.root())));
+        if open {
+            let base = repo
+                .try_run(["merge-base", "HEAD", upstream])?
+                .map(|b| b.trim().to_owned());
+            if let Some(base) = base {
+                let plans = gang_core::layers::plan(repo, &base, upstream)?;
+                if plans
+                    .iter()
+                    .any(|(_, moves)| moves.iter().any(|m| !m.follow))
+                {
+                    anyhow::bail!(
+                        "Unity is open, and one of your layers has to move to a free number before this merge.
+  Save your work in Unity and close it, then run the command again. (`gang --ignore-editor …` merges anyway; Unity must reload the project settings before you save.)"
+                    );
+                }
+            }
+        }
+    }
     for warning in gang_core::layers::removed_in_use(repo, upstream).unwrap_or_default() {
         ui::warn(warning);
     }

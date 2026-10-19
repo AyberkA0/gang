@@ -1347,3 +1347,33 @@ fn a_renamed_field_keeps_the_other_side_s_change() {
     assert_eq!(sync.code, Some(0), "{sync:?}");
     assert_eq!(team.read("bob", path), level("jump", "4"));
 }
+
+/// Thought experiment R3: Unity keeps the project settings in memory, so a
+/// layer moved under an open editor would be written back the old way. The
+/// sync stops and says why; --ignore-editor merges anyway.
+#[test]
+fn a_layer_move_waits_for_unity_to_close() {
+    let team = Team::new();
+    clash_on_layer_8(&team);
+    let temp = team.sandbox.dir.path().join("bob").join("Temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let file = std::fs::File::create(temp.join("UnityLockfile")).unwrap();
+    let mut lock = fd_lock::RwLock::new(file);
+    let held = lock.write().unwrap();
+    let sync = team.sync("bob", "UI3D layer");
+    assert_ne!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr
+            .contains("Unity is open, and one of your layers has to move"),
+        "{sync:?}"
+    );
+    let merge_head = team.sandbox.dir.path().join("bob/.git/MERGE_HEAD");
+    assert!(!merge_head.exists());
+    drop(held);
+    let sync = team.gang("bob", &["sync"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stdout.contains("Moving \"UI3D\" to layer 9"),
+        "{sync:?}"
+    );
+}

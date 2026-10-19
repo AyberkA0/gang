@@ -111,7 +111,7 @@ fn layer_pass(invocation: &Invocation, repo: &Repo, name: &str) -> Result<()> {
             );
             if let [rev] = revs.as_slice() {
                 if !has(&args, &["--no-commit", "--squash"]) {
-                    crate::sync_cmd::pre_merge(repo, rev, false)?;
+                    crate::sync_cmd::pre_merge(repo, rev, false, invocation.options.ignore_editor)?;
                 }
             }
         }
@@ -140,7 +140,7 @@ fn layer_pass(invocation: &Invocation, repo: &Repo, name: &str) -> Result<()> {
                 },
                 _ => return Ok(()),
             };
-            crate::sync_cmd::pre_merge(repo, &upstream, true)?;
+            crate::sync_cmd::pre_merge(repo, &upstream, true, invocation.options.ignore_editor)?;
         }
         "pull" => {
             if has(&args, &["--ff-only"]) {
@@ -149,7 +149,12 @@ fn layer_pass(invocation: &Invocation, repo: &Repo, name: &str) -> Result<()> {
             let Some(upstream) = fetch_for_pull(invocation, repo, &args)? else {
                 return Ok(());
             };
-            crate::sync_cmd::pre_merge(repo, &upstream, pull_rebases(repo, &args)?)?;
+            crate::sync_cmd::pre_merge(
+                repo,
+                &upstream,
+                pull_rebases(repo, &args)?,
+                invocation.options.ignore_editor,
+            )?;
         }
         "cherry-pick" => {
             if has(&args, &["-n", "--no-commit"]) {
@@ -170,7 +175,12 @@ fn layer_pass(invocation: &Invocation, repo: &Repo, name: &str) -> Result<()> {
                 // A range picks up to its last commit.
                 let tip = commit.rsplit("..").next().unwrap_or(&commit).to_owned();
                 if !tip.is_empty() {
-                    crate::sync_cmd::pre_merge(repo, &tip, false)?;
+                    crate::sync_cmd::pre_merge(
+                        repo,
+                        &tip,
+                        false,
+                        invocation.options.ignore_editor,
+                    )?;
                 }
             }
         }

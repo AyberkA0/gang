@@ -266,7 +266,7 @@ fn start(invocation: &Invocation, repo: &Repo, number: u64, into: Option<String>
     );
     let config = gang_core::config::Config::load(repo.root()).unwrap_or_default();
     if config.layers.auto_remap {
-        crate::sync_cmd::pre_merge(repo, &upstream, false)?;
+        crate::sync_cmd::pre_merge(repo, &upstream, false, invocation.options.ignore_editor)?;
     }
     let incoming = repo
         .run(["rev-list", "--count", &format!("HEAD..{upstream}")])?
