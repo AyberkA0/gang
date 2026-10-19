@@ -220,6 +220,7 @@ Options:
       --into <INTO>  The branch to merge into (default: the pull request's base)
       --continue     Finish a merge that stopped for questions
       --abort        Give up a merge that stopped for questions
+      --on-branch    Push the merge to the pull request's own branch instead of the base (for a protected base: then press Merge on GitHub, which keeps GANG's result because the branch is up to date)
   -h, --help         Print help
 ```
 

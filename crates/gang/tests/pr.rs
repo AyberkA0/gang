@@ -167,3 +167,63 @@ fn a_pull_request_with_a_question_waits_and_continues() {
     );
     assert_eq!(contains.code, Some(0), "{contains:?}");
 }
+
+/// Thought experiment R7: the base branch is protected on GitHub (only the
+/// Merge button may change it). The merge goes to the pull request's branch
+/// instead; GitHub's button then merges an up-to-date branch, which keeps
+/// GANG's result.
+#[test]
+fn a_protected_base_gets_the_merge_on_the_pull_request_branch() {
+    let team = Team::new();
+    team.open_pull_request(&scene(&[(200, "Tree", "0"), (300, "Rock", "5")]));
+    let push = team.git("bob", &["push", "-q", &team.url, "forest"]);
+    assert_eq!(push.code, Some(0), "{push:?}");
+    team.write(
+        "alice",
+        SCENE,
+        &scene(&[(200, "Tree", "0"), (400, "Lamp", "9")]),
+    );
+    assert_eq!(team.gang("alice", &["sync", "-m", "lamp"]).code, Some(0));
+
+    // From now on main only changes through GitHub.
+    let hook = team.sandbox.dir.path().join("remote.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nwhile read old new name; do\n  if [ \"$name\" = refs/heads/main ]; then\n    echo \"remote: error: GH006: Protected branch update failed for refs/heads/main.\" >&2\n    exit 1\n  fi\ndone\nexit 0\n",
+    )
+    .unwrap();
+
+    let merge = team.gang("alice", &["pr", "merge", "1", "--into", "main"]);
+    assert_eq!(merge.code, Some(0), "{merge:?}");
+    assert!(
+        merge
+            .stdout
+            .contains("Merged main into pull request #1's branch forest and pushed"),
+        "{merge:?}"
+    );
+    assert!(merge.stderr.contains("Press Merge on GitHub"), "{merge:?}");
+    // The pull request's branch now holds the merged scene; main is as it was.
+    team.git("alice", &["fetch", "-q"]);
+    let text = team
+        .git(
+            "alice",
+            &["show", "origin/forest:Assets/Scenes/Level1.unity"],
+        )
+        .stdout;
+    for name in ["m_Name: Tree", "m_Name: Rock", "m_Name: Lamp"] {
+        assert!(text.contains(name), "{name}\n{text}");
+    }
+    let contains = team.git(
+        "alice",
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "origin/main",
+            "origin/forest",
+        ],
+    );
+    assert_eq!(contains.code, Some(0), "{contains:?}");
+    let main = team.git("alice", &["rev-parse", "main"]).stdout;
+    let origin_main = team.git("alice", &["rev-parse", "origin/main"]).stdout;
+    assert_eq!(main, origin_main);
+}

@@ -1089,7 +1089,9 @@ GitHub's "Merge pull request" button merges Unity files line by line, without GA
 2. Checks out the pull request's commits and merges the base into them, the way the pull request's author would sync: the layer pass moves the pull request's new layers (the base is already shared), the merge driver merges scenes object by object, and remaining questions go to `gang bang`. If questions remain without a terminal, it stops: `gang bang`, then `gang pr merge --continue` (or `--abort`).
 3. Records a merge commit on the base branch (first parent: the base, second: the merged pull request), fast-forwards the local base branch to it and pushes. GitHub marks the pull request as merged because its commits are now on the base.
 
-Teams that use pull requests should merge them with `gang pr merge`, not the button.
+**Protected base branches.** When GitHub refuses the push because the base only takes merges through GitHub (branch protection), GANG undoes its local merge commit and pushes the merge (the base merged into the pull request, GANG's way) to the pull request's own branch instead, when it is a branch of this repository; `--on-branch` asks for that directly. The Merge button then merges a branch that already contains the base, so GitHub's merge keeps GANG's result.
+
+Teams that use pull requests should merge them with `gang pr merge`, not the button alone.
 
 ## 19. Configuration
 

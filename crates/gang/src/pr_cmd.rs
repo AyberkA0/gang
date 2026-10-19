@@ -44,6 +44,11 @@ enum Action {
         /// Give up a merge that stopped for questions
         #[arg(long)]
         abort: bool,
+        /// Push the merge to the pull request's own branch instead of the
+        /// base (for a protected base: then press Merge on GitHub, which
+        /// keeps GANG's result because the branch is up to date)
+        #[arg(long)]
+        on_branch: bool,
     },
 }
 
@@ -55,6 +60,13 @@ struct State {
     title: String,
     /// The branch checked out before, to return to.
     previous: Option<String>,
+    /// The pull request's own branch on `origin`, when it lives there: where
+    /// the merge goes when the base branch is protected.
+    #[serde(default)]
+    head_branch: Option<String>,
+    /// Push the merge to the pull request's branch instead of the base.
+    #[serde(default)]
+    on_branch: bool,
 }
 
 fn state_path(repo: &Repo) -> std::path::PathBuf {
@@ -73,6 +85,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         into,
         resume,
         abort,
+        on_branch,
     } = args.action;
     if abort {
         return abort_merge(&repo);
@@ -85,7 +98,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         return finish(&repo, &state);
     }
     let number = number.context("which pull request? gang pr merge <number>")?;
-    start(invocation, &repo, number, into)
+    start(invocation, &repo, number, into, on_branch)
 }
 
 /// A token for GitHub's API: GANG's sign-in, else whatever git's own
@@ -147,6 +160,13 @@ struct Ref {
     #[serde(rename = "ref")]
     name: String,
     sha: String,
+    #[serde(default)]
+    repo: Option<HeadRepo>,
+}
+
+#[derive(Deserialize)]
+struct HeadRepo {
+    full_name: String,
 }
 
 fn pull_request(repo: &Repo, number: u64) -> Option<PullRequest> {
@@ -157,7 +177,13 @@ fn pull_request(repo: &Repo, number: u64) -> Option<PullRequest> {
         .and_then(|value| serde_json::from_value(value).ok())
 }
 
-fn start(invocation: &Invocation, repo: &Repo, number: u64, into: Option<String>) -> Result<i32> {
+fn start(
+    invocation: &Invocation,
+    repo: &Repo,
+    number: u64,
+    into: Option<String>,
+    on_branch: bool,
+) -> Result<i32> {
     if !repo
         .run(["status", "--porcelain", "--untracked-files=no"])?
         .trim()
@@ -246,12 +272,43 @@ fn start(invocation: &Invocation, repo: &Repo, number: u64, into: Option<String>
         return Ok(0);
     }
 
+    // The pull request's branch, when it is a branch of this repository:
+    // GitHub's answer, else the branch on origin whose tip is the head.
+    let pr_head = repo.run(["rev-parse", &pr_ref])?.trim().to_owned();
+    let head_branch = match &info {
+        Some(pr)
+            if pr
+                .head
+                .repo
+                .as_ref()
+                .zip(github_slug(repo))
+                .is_some_and(|(r, slug)| r.full_name.eq_ignore_ascii_case(&slug)) =>
+        {
+            Some(pr.head.name.clone())
+        }
+        Some(_) => None,
+        None => repo
+            .try_run(["ls-remote", "origin", "refs/heads/*"])?
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .find(|(sha, _)| *sha == pr_head)
+            .and_then(|(_, name)| name.strip_prefix("refs/heads/").map(str::to_owned)),
+    };
+    if on_branch && head_branch.is_none() {
+        bail!(
+            "the pull request's branch is not a branch of this repository, so the merge cannot go there"
+        );
+    }
+
     // 2. On the pull request's commits, as its author would sync.
     let state = State {
         number,
         base: base.clone(),
         title,
         previous: current,
+        head_branch,
+        on_branch,
     };
     std::fs::create_dir_all(repo.gang_dir())?;
     std::fs::write(state_path(repo), serde_json::to_string_pretty(&state)?)?;
@@ -296,6 +353,9 @@ fn finish(repo: &Repo, state: &State) -> Result<i32> {
     let upstream = format!("origin/{base}");
     let tree = repo.run(["rev-parse", "HEAD^{tree}"])?;
     let head = repo.run(["rev-parse", "HEAD"])?;
+    if state.on_branch {
+        return to_branch(repo, state, head.trim(), None);
+    }
     let mut message = format!("Merge pull request #{} into {base}", state.number);
     if !state.title.is_empty() {
         message.push_str(&format!("\n\n{}", state.title));
@@ -323,19 +383,35 @@ fn finish(repo: &Repo, state: &State) -> Result<i32> {
         let _ = repo.run(["branch", "-q", "--set-upstream-to", &upstream]);
     }
     let output = repo.output(["push", "-q", "origin", &format!("{base}:refs/heads/{base}")])?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let protected = ["protected branch", "GH006", "protected"]
+            .iter()
+            .any(|w| stderr.contains(w));
+        if protected && state.head_branch.is_some() {
+            // The base only takes merges through GitHub: undo our local
+            // merge commit and put the merge on the pull request's branch.
+            repo.run(["reset", "-q", "--keep", &upstream])?;
+            return to_branch(repo, state, head.trim(), Some(&stderr));
+        }
+        let _ = std::fs::remove_file(state_path(repo));
+        let _ = repo.run([
+            "update-ref",
+            "-d",
+            &format!("refs/gang/pr/{}", state.number),
+        ]);
+        eprint!("{stderr}");
+        ui::warn(format!(
+            "the merge is committed on your {base} but not pushed; run `gang sync` to push it"
+        ));
+        return Ok(1);
+    }
     let _ = std::fs::remove_file(state_path(repo));
     let _ = repo.run([
         "update-ref",
         "-d",
         &format!("refs/gang/pr/{}", state.number),
     ]);
-    if !output.status.success() {
-        eprint!("{}", String::from_utf8_lossy(&output.stderr));
-        ui::warn(format!(
-            "the merge is committed on your {base} but not pushed; run `gang sync` to push it"
-        ));
-        return Ok(1);
-    }
     ui::done(format!(
         "Merged pull request #{} into {base} and pushed; GitHub marks it as merged",
         state.number
@@ -345,6 +421,49 @@ fn finish(repo: &Repo, state: &State) -> Result<i32> {
             let _ = repo.run(["switch", "-q", previous]);
         }
     }
+    Ok(0)
+}
+
+/// Puts the merge (the base merged into the pull request, GANG's way) on
+/// the pull request's own branch. GitHub's Merge button then merges a
+/// branch that already contains the base, which keeps GANG's result.
+fn to_branch(repo: &Repo, state: &State, merged: &str, refused: Option<&str>) -> Result<i32> {
+    let branch = state
+        .head_branch
+        .as_deref()
+        .context("the pull request's branch is not known")?;
+    let output = repo.output([
+        "push",
+        "-q",
+        "origin",
+        &format!("{merged}:refs/heads/{branch}"),
+    ])?;
+    let _ = std::fs::remove_file(state_path(repo));
+    let _ = repo.run([
+        "update-ref",
+        "-d",
+        &format!("refs/gang/pr/{}", state.number),
+    ]);
+    let back = state.previous.as_deref().unwrap_or(&state.base);
+    let _ = repo.run(["switch", "-q", back]);
+    if !output.status.success() {
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        ui::warn(format!("could not push the merge to {branch}"));
+        return Ok(1);
+    }
+    if refused.is_some() {
+        ui::warn(format!(
+            "{} only takes merges through GitHub (a protected branch).",
+            state.base
+        ));
+    }
+    ui::done(format!(
+        "Merged {} into pull request #{}'s branch {branch} and pushed",
+        state.base, state.number
+    ));
+    ui::hint(
+        "Press Merge on GitHub now: the branch already contains the base, so GitHub keeps GANG's result.",
+    );
     Ok(0)
 }
 
