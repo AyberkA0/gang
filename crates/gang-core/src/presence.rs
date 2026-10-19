@@ -216,7 +216,14 @@ pub fn upstream(repo: &Repo, config: &Config) -> Result<Option<String>> {
 pub fn compute_flags(repo: &Repo, upstream: Option<&str>) -> Result<BTreeMap<String, State>> {
     let mut flags = BTreeMap::new();
 
-    let status = repo.run(["status", "--porcelain=v2", "-z", "--untracked-files=all"])?;
+    // Read-only: never take index.lock, the next GANG command may need it.
+    let status = repo.run([
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=all",
+    ])?;
     let mut entries = status.split('\0').filter(|e| !e.is_empty());
     while let Some(entry) = entries.next() {
         let kind = entry.chars().next().unwrap_or(' ');

@@ -81,6 +81,8 @@ pub fn spawn_publish(repo: &Repo) {
     command
         .arg("presence-publish")
         .current_dir(repo.root())
+        // Its git calls must not take index.lock from the user's next command.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
