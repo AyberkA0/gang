@@ -774,6 +774,78 @@ fn changed_objects(repo: &Repo, upstream: Option<&str>, path: &str) -> Vec<Targe
 
 /// For the panel's `--watch` mode: auto-lock new changes, release pushed
 /// ones, without output.
+/// Changed files the project wants locked (`[scenes.policy]`), with no
+/// lock on them: what `gang save` locks and `gang status` mentions.
+pub fn required_but_unlocked(repo: &Repo) -> Vec<String> {
+    let Ok(config) = Config::load(repo.root()) else {
+        return Vec::new();
+    };
+    if config.scenes.policy.is_empty() {
+        return Vec::new();
+    }
+    let mut changed = repo
+        .run(["diff", "--name-only", "-z", "HEAD"])
+        .map(|out| gang_core::repo::split_nul(&out))
+        .unwrap_or_default();
+    changed.extend(
+        repo.run(["ls-files", "-z", "--others", "--exclude-standard"])
+            .map(|out| gang_core::repo::split_nul(&out))
+            .unwrap_or_default(),
+    );
+    let all = locks::read(repo).map(|t| t.locks).unwrap_or_default();
+    gang_core::lock_check::unlocked_but_required(&config, &all, changed.iter().map(String::as_str))
+}
+
+/// Before `gang save`: takes an auto lock (released at the push) on each
+/// changed file the project wants locked that nobody holds (R35).
+pub fn before_save(repo: &Repo) {
+    let wanted = required_but_unlocked(repo);
+    if wanted.is_empty() {
+        return;
+    }
+    let _ = locks::fetch(repo);
+    let Ok(me) = presence::identity(repo) else {
+        return;
+    };
+    let result = locks::update(repo, |table| {
+        let mut taken = Vec::new();
+        for path in &wanted {
+            if table
+                .locks
+                .iter()
+                .any(|l| l.targets().any(|t| t.covers_file(path)))
+            {
+                continue;
+            }
+            table.locks.push(Lock {
+                id: locks::new_id(),
+                owner: me.login.clone(),
+                github_id: me.github_id,
+                since: clock::format(clock::now()),
+                reason: Some("the project wants it locked while it changes".to_owned()),
+                kind: LockKind::Auto,
+                level: 0,
+                root: Target::File { path: path.clone() },
+                derived: Vec::new(),
+            });
+            taken.push(path.clone());
+        }
+        Ok(taken)
+    });
+    match result {
+        Ok(taken) => {
+            for path in taken {
+                println!(
+                    "🔒 Locked {path}: the project wants it locked while it changes (released when you push)"
+                );
+            }
+        }
+        Err(err) => ui::warn(format!(
+            "could not lock what the project wants locked: {err:#}"
+        )),
+    }
+}
+
 pub fn watch_tick(repo: &Repo) -> Result<()> {
     let enabled = std::fs::read_to_string(repo.gang_dir().join("local.toml"))
         .map(|t| {

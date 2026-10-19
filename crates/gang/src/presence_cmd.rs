@@ -360,6 +360,11 @@ fn lock_notes(repo: &Repo) -> Result<Vec<String>> {
         })
         .collect();
     let mut notes = Vec::new();
+    for path in crate::locks_cmd::required_but_unlocked(repo) {
+        notes.push(format!(
+            "⚠ {path}: the project wants it locked while it changes. `gang lock {path}` now, so nobody else starts on it (gang save locks it otherwise)."
+        ));
+    }
     for hit in crate::locks_cmd::check_changes(repo, false, &versions)? {
         notes.push(format!("⚠ {}", hit.message()));
         if let Some(target) = hit.restore {

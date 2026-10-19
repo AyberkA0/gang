@@ -147,6 +147,10 @@ impl Team {
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(full, text).unwrap();
     }
+
+    fn read(&self, user: &str, path: &str) -> String {
+        std::fs::read_to_string(self.sandbox.dir.path().join(user).join(path)).unwrap()
+    }
 }
 
 #[test]
@@ -561,4 +565,71 @@ fn the_bake_lock_covers_the_navmesh_surface() {
     let commit = team.git("bob", &["commit", "-q", "-m", "bake"]);
     assert_eq!(commit.code, Some(1), "{commit:?}");
     assert!(commit.stderr.contains("NavMeshSurface"), "{commit:?}");
+}
+
+/// Thought experiment R35: `[scenes.policy]` was documented and parsed but
+/// did nothing. A scene the team wants locked while it changes is now
+/// locked by `gang save` when nobody holds it (`gang status` on a terminal
+/// mentions it before), and a plain commit without the lock is stopped.
+#[test]
+fn scenes_the_policy_wants_locked_are_locked_on_save() {
+    let team = Team::new(&["alice", "bob"]);
+    let config = team.read("alice", ".gang/config.toml");
+    team.write(
+        "alice",
+        ".gang/config.toml",
+        &format!("{config}\n[scenes.policy]\n\"Assets/Scenes/*\" = \"lock-required\"\n\"Assets/Scenes/Sandbox.unity\" = \"merge\"\n"),
+    );
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "lock the scenes"]).code,
+        Some(0)
+    );
+    assert_eq!(team.gang("bob", &["sync"]).code, Some(0));
+
+    let scene = "Assets/Scenes/Level1.unity";
+    let text = team.read("alice", scene);
+    team.write(
+        "alice",
+        scene,
+        &text.replace("m_Name: Player", "m_Name: Hero"),
+    );
+    let save = team.gang("alice", &["save", "-m", "hero"]);
+    assert_eq!(save.code, Some(0), "{save:?}");
+    assert!(
+        save.stdout
+            .contains("🔒 Locked Assets/Scenes/Level1.unity: the project wants it locked"),
+        "{save:?}"
+    );
+
+    // Bob cannot commit it while Alice holds it.
+    team.write(
+        "bob",
+        scene,
+        &text.replace("m_Name: Player", "m_Name: Villain"),
+    );
+    let save = team.gang("bob", &["save", "-m", "villain"]);
+    assert_eq!(save.code, Some(1), "{save:?}");
+    assert!(save.stderr.contains("alice"), "{save:?}");
+
+    // A plain commit with no lock at all is stopped too.
+    assert_eq!(team.gang("alice", &["sync"]).code, Some(0));
+    assert_eq!(
+        team.gang("bob", &["git", "checkout", "--", scene]).code,
+        Some(0)
+    );
+    assert_eq!(team.gang("bob", &["sync"]).code, Some(0));
+    let text = team.read("bob", scene);
+    team.write(
+        "bob",
+        scene,
+        &text.replace("m_Name: Hero", "m_Name: Knight"),
+    );
+    let commit = team.gang("bob", &["git", "commit", "-q", "-am", "knight"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(
+        commit
+            .stderr
+            .contains("Fix: gang lock Assets/Scenes/Level1.unity"),
+        "{commit:?}"
+    );
 }

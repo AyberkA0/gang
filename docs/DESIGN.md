@@ -545,6 +545,8 @@ File kinds: `binary` (LFS or `binary` attribute), `unity` (Unity YAML assets), `
 
 The rest of the scene stays editable and mergeable. With the project policy `[scenes] lighting = "lock"`, committing bake outputs without holding the bake lock is blocked.
 
+**Scenes the team wants locked.** `[scenes.policy]` maps paths or patterns (`*` within a folder, `**` across folders) to `"lock-required"` or `"merge"`; an exact path wins over patterns and a longer pattern over a shorter one, so `"Assets/Scenes/**" = "lock-required"` with `"Assets/Scenes/Levels/*" = "merge"` locks every scene but the levels. A file the policy wants locked is locked by `gang save` when nobody holds it (an auto lock, released at the push), `gang status` mentions it as soon as it changes, and a commit of it without any lock is stopped (HARDENING R35); someone else's lock stops the commit as every lock does.
+
 ## 11. Unity YAML
 
 ### 11.1 Format

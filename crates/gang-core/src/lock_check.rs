@@ -218,6 +218,30 @@ pub fn bake_output_scene(index: &BTreeSet<String>, path: &str) -> Option<String>
     index.contains(&scene).then_some(scene)
 }
 
+/// Changed files the project wants locked (`[scenes.policy]`
+/// "lock-required", HARDENING R35) that nobody holds a lock on. A lock of
+/// someone else's is reported by the lock check itself.
+pub fn unlocked_but_required<'a>(
+    config: &crate::config::Config,
+    all: &[Lock],
+    paths: impl IntoIterator<Item = &'a str>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for path in paths {
+        let asset = path.strip_suffix(".meta").unwrap_or(path);
+        if !config.scenes.lock_required(asset) || out.iter().any(|p| p == asset) {
+            continue;
+        }
+        if !all
+            .iter()
+            .any(|l| l.targets().any(|t| t.covers_file(asset)))
+        {
+            out.push(asset.to_owned());
+        }
+    }
+    out
+}
+
 /// The folder a scene's bake outputs go to.
 pub fn bake_folder(scene: &str) -> String {
     format!("{}/", scene.strip_suffix(".unity").unwrap_or(scene))

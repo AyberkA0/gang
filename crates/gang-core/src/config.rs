@@ -110,6 +110,29 @@ pub struct ScenesConfig {
     pub policy: std::collections::BTreeMap<String, String>,
 }
 
+impl ScenesConfig {
+    /// The project's `[scenes.policy]` for `path`: `"lock-required"` or
+    /// `"merge"`. An exact path wins over patterns, a longer pattern over a
+    /// shorter one (`Assets/Scenes/**` locked, `Assets/Scenes/Levels/*`
+    /// merged).
+    pub fn policy_for(&self, path: &str) -> Option<&str> {
+        let path = path.strip_suffix(".meta").unwrap_or(path);
+        if let Some(policy) = self.policy.get(path) {
+            return Some(policy);
+        }
+        self.policy
+            .iter()
+            .filter(|(pattern, _)| crate::locks::glob_match(pattern, path))
+            .max_by_key(|(pattern, _)| pattern.len())
+            .map(|(_, policy)| policy.as_str())
+    }
+
+    /// Whether the team wants `path` locked by whoever changes it.
+    pub fn lock_required(&self, path: &str) -> bool {
+        self.policy_for(path) == Some("lock-required")
+    }
+}
+
 impl Default for ScenesConfig {
     fn default() -> Self {
         ScenesConfig {
@@ -206,7 +229,15 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Config> {
-        Ok(toml::from_str(text)?)
+        let config: Config = toml::from_str(text)?;
+        for (pattern, policy) in &config.scenes.policy {
+            if !matches!(policy.as_str(), "lock-required" | "merge") {
+                bail!(
+                    "[scenes.policy] {pattern:?} = {policy:?}: use \"lock-required\" or \"merge\""
+                );
+            }
+        }
+        Ok(config)
     }
 }
 
@@ -275,6 +306,29 @@ pub fn set(text: &str, key: &str, value: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_policy_prefers_exact_paths_and_longer_patterns() {
+        let config = Config::parse(
+            "[scenes.policy]
+\"Assets/Scenes/**\" = \"lock-required\"
+\"Assets/Scenes/Levels/*\" = \"merge\"
+\"Assets/Scenes/Levels/Boss.unity\" = \"lock-required\"
+",
+        )
+        .unwrap();
+        let scenes = &config.scenes;
+        assert!(scenes.lock_required("Assets/Scenes/Main.unity"));
+        assert!(scenes.lock_required("Assets/Scenes/Main.unity.meta"));
+        assert!(scenes.lock_required("Assets/Scenes/Menus/Title.unity"));
+        assert!(!scenes.lock_required("Assets/Scenes/Levels/Level1.unity"));
+        assert!(scenes.lock_required("Assets/Scenes/Levels/Boss.unity"));
+        assert!(!scenes.lock_required("Assets/Prefabs/Hero.prefab"));
+        let wrong = Config::parse("[scenes.policy]
+\"Assets/*\" = \"locked\"
+").unwrap_err();
+        assert!(format!("{wrong:#}").contains("use \"lock-required\" or \"merge\""));
+    }
 
     #[test]
     fn default_text_matches_defaults() {

@@ -58,6 +58,9 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
     if let Some(code) = crate::prefabs_cmd::before_save(&repo)? {
         return Ok(code);
     }
+    // Files the project wants locked while they change: locked now, when
+    // nobody holds them ([scenes.policy], R35).
+    crate::locks_cmd::before_save(&repo);
 
     // A refused save must leave the index exactly as it was.
     let index_before = repo.try_run(["write-tree"])?.map(|t| t.trim().to_owned());
@@ -275,6 +278,23 @@ fn pre_commit() -> Result<i32> {
             );
         }
         let changes = guards::staged_changes(&repo)?;
+        let config = gang_core::config::Config::load(repo.root()).unwrap_or_default();
+        if !config.scenes.policy.is_empty() {
+            let all = gang_core::locks::read(&repo)
+                .map(|t| t.locks)
+                .unwrap_or_default();
+            for path in gang_core::lock_check::unlocked_but_required(
+                &config,
+                &all,
+                changes.iter().map(|c| c.path.as_str()),
+            ) {
+                blocked = true;
+                eprintln!(
+                    "✗ {path}: the project wants it locked while it changes ([scenes.policy] lock-required)"
+                );
+                eprintln!("  Fix: gang lock {path}  (gang save takes the lock for you)");
+            }
+        }
         let versions: Vec<(String, Option<String>, Option<String>)> = changes
             .iter()
             .map(|c| {
