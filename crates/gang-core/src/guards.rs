@@ -317,7 +317,15 @@ fn check_metas(
         if let Some(asset) = path.strip_suffix(".meta") {
             if change.adds() && !index.contains(asset) && !has_children(asset) {
                 let on_disk = repo.root().join(asset);
-                if on_disk.is_dir() {
+                // Decided by the .meta itself, not the disk: a teammate merging
+                // this commit has no folder, since git keeps no empty folders,
+                // and must get the same warning, not a block (field test A6).
+                let folder_meta = repo
+                    .try_run(["cat-file", "-p", &format!(":{path}")])
+                    .ok()
+                    .flatten()
+                    .is_some_and(|text| text.contains("folderAsset: yes"));
+                if on_disk.is_dir() || folder_meta {
                     findings.push(Finding::warn(
                         path,
                         format!(

@@ -549,3 +549,25 @@ fn an_untracked_file_does_not_stop_sync() {
     assert_eq!(team.read("bob", SCENE), scene("1", "2.5", ""));
     assert!(team.read("bob", "Assets/Scripts/Draft.cs").contains("Draft"));
 }
+
+/// Field test A6: an empty folder's .meta only warns its author, so it must
+/// not block the teammate's merge commit either.
+#[test]
+fn an_empty_folder_meta_does_not_block_the_merge() {
+    let team = Team::new();
+    std::fs::create_dir_all(team.sandbox.dir.path().join("alice/Assets/Prefabs")).unwrap();
+    team.write(
+        "alice",
+        "Assets/Prefabs.meta",
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000eeee\nfolderAsset: yes\n",
+    );
+    team.write("alice", SCENE, &scene("0", "3", ""));
+    let save = team.sync("alice", "prefabs folder");
+    assert_eq!(save.code, Some(0), "{save:?}");
+    // Bob's merge needs an answer, so its commit runs the pre-commit checks.
+    team.write("bob", SCENE, &scene("0", "4", ""));
+    assert_eq!(team.sync("bob", "jump").code, Some(1));
+    let bang = team.gang("bob", &["bang", "--prefer", "theirs"]);
+    assert_eq!(bang.code, Some(0), "{bang:?}");
+    assert!(!bang.stderr.contains("has no asset"), "{bang:?}");
+}
