@@ -130,6 +130,8 @@ fn deletion(repo: &Repo, range: &str, asset: &str) -> Option<(String, String)> {
             "-1",
             "--format=%h%x1f%an",
             "--diff-filter=D",
+            // A small .meta deleted next to a new one looks like a rename.
+            "--no-renames",
             range,
             "--",
             &format!("{asset}.meta"),
@@ -323,6 +325,7 @@ pub fn deleted_asset(repo: &Repo, guid: &str) -> Option<(String, String, String)
             "log",
             "-1",
             "--diff-filter=D",
+            "--no-renames",
             "--format=%h%x1f%an",
             "--name-only",
             "-S",

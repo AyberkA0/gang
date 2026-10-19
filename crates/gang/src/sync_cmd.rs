@@ -45,6 +45,12 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
             return Ok(code);
         }
         ui::done("Finished the merge that was left open");
+        // The checks a merge gets when gang bang commits it (R43).
+        if let Err(err) = crate::prefabs_cmd::after_merge(&repo, "HEAD^1") {
+            ui::warn(format!(
+                "could not check references after the merge: {err:#}"
+            ));
+        }
     }
 
     // 1. Uncommitted work. New files nobody tracks yet do not stand in the

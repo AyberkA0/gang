@@ -341,14 +341,20 @@ fn lock_notes(repo: &Repo) -> Result<Vec<String>> {
     if !setup::is_gang_repo(repo) {
         return Ok(Vec::new());
     }
-    let changed = gang_core::repo::split_nul(&repo.run(["diff", "--name-only", "-z", "HEAD"])?);
+    // During a merge the other side's changes are theirs, not ours (R41).
+    let base = if repo.git_dir().join("MERGE_HEAD").exists() {
+        "MERGE_HEAD"
+    } else {
+        "HEAD"
+    };
+    let changed = gang_core::repo::split_nul(&repo.run(["diff", "--name-only", "-z", base])?);
     let versions: Vec<(String, Option<String>, Option<String>)> = changed
         .into_iter()
         .map(|path| {
             let unity = attributes::is_unity_yaml(&path);
             let old = unity
                 .then(|| {
-                    gang_core::semantic::blob(repo, &format!("HEAD:{path}"))
+                    gang_core::semantic::blob(repo, &format!("{base}:{path}"))
                         .ok()
                         .flatten()
                 })

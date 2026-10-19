@@ -49,6 +49,12 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
         ui::hint("Answer them first: gang bang");
         return Ok(1);
     }
+    // The team's locks as they are now: the commit hook checks against
+    // them, and a lock taken since the last sync must stop this save, not
+    // the push after it (R42).
+    if setup::is_gang_repo(&repo) {
+        let _ = gang_core::locks::fetch(&repo);
+    }
     // New layers: reserve them, and move the ones a teammate took first
     // before anything is staged (DESIGN.md §14.6).
     if let Some(code) = crate::layers_cmd::before_save(&repo)? {
@@ -310,31 +316,55 @@ fn pre_commit() -> Result<i32> {
                 eprintln!("  Fix: gang lock {path}  (gang save takes the lock for you)");
             }
         }
-        let versions: Vec<(String, Option<String>, Option<String>)> = changes
+        // What this commit changes in locked targets. A merge commit carries
+        // the other side's work too, the lock owner's own changes among it;
+        // only what our side adds on top of theirs counts (R41).
+        let merging = repo.git_dir().join("MERGE_HEAD").exists();
+        let base = if merging { "MERGE_HEAD" } else { "HEAD" };
+        let lock_changes: Vec<(String, bool)> = if merging {
+            let fields = gang_core::repo::split_nul(&repo.run([
+                "diff",
+                "--cached",
+                "--name-status",
+                "--no-renames",
+                "-z",
+                "MERGE_HEAD",
+            ])?);
+            fields
+                .chunks(2)
+                .filter(|c| c.len() == 2)
+                .map(|c| (c[1].clone(), c[0].starts_with('D')))
+                .collect()
+        } else {
+            changes
+                .iter()
+                .map(|c| (c.path.clone(), c.deletes()))
+                .collect()
+        };
+        let versions: Vec<(String, Option<String>, Option<String>)> = lock_changes
             .iter()
-            .map(|c| {
-                let unity = gang_core::attributes::is_unity_yaml(&c.path);
+            .map(|(path, deletes)| {
+                let unity = gang_core::attributes::is_unity_yaml(path);
                 let old = unity
                     .then(|| {
-                        semantic::blob(&repo, &format!("HEAD:{}", c.path))
+                        semantic::blob(&repo, &format!("{base}:{path}"))
                             .ok()
                             .flatten()
                     })
                     .flatten();
-                let new = (unity && !c.deletes())
-                    .then(|| {
-                        semantic::blob(&repo, &format!(":{}", c.path))
-                            .ok()
-                            .flatten()
-                    })
+                let new = (unity && !deletes)
+                    .then(|| semantic::blob(&repo, &format!(":{path}")).ok().flatten())
                     .flatten();
-                (c.path.clone(), old, new)
+                (path.clone(), old, new)
             })
             .collect();
         for hit in crate::locks_cmd::check_changes(&repo, false, &versions).unwrap_or_default() {
             blocked = true;
             eprintln!("✗ {}", hit.message());
             match &hit.restore {
+                Some(target) if merging => eprintln!(
+                    "  Fix: gang restore --source MERGE_HEAD {target}  (takes that object as the other side has it), then add the file again"
+                ),
                 Some(target) => eprintln!(
                     "  Fix: gang restore {target}  (undoes only that object), then add the file again"
                 ),

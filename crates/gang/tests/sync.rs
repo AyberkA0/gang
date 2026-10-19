@@ -2007,3 +2007,44 @@ fn commit_all_during_a_merge_does_not_settle_open_questions() {
     );
     assert!(team.sandbox.dir.path().join("bob/.git/MERGE_HEAD").exists());
 }
+
+/// Field test (maze) R43 + R44: a merge finished by `gang sync` (answered
+/// by hand, then committed by the next sync) skipped the reference checks,
+/// so a material deleted on one side and used on the other went unnoticed;
+/// and a deleted .meta next to a new one looked like a rename to git, so
+/// the commit that deleted it was not found.
+#[test]
+fn a_merge_finished_by_sync_checks_deleted_assets() {
+    let team = Team::new();
+    team.add_red("alice");
+    assert_eq!(team.sync("alice", "red material").code, Some(0));
+    assert_eq!(team.sync("bob", "-").code, Some(0));
+
+    team.remove("alice", "Assets/Materials/Red.mat");
+    team.remove("alice", "Assets/Materials/Red.mat.meta");
+    team.write(
+        "alice",
+        "Assets/Materials/Blue.mat",
+        &RED.replace("Red", "Blue"),
+    );
+    team.write(
+        "alice",
+        "Assets/Materials/Blue.mat.meta",
+        "fileFormatVersion: 2\nguid: b1b2b3b4b5b6b7b8b9b0b1b2b3b4b5b6\n",
+    );
+    team.write("alice", SCENE, &scene("0", "3", ""));
+    assert_eq!(team.sync("alice", "blue instead of red").code, Some(0));
+
+    team.write("bob", SCENE, &scene("0", "4", RED_RENDERER));
+    assert_eq!(team.sync("bob", "red player").code, Some(1));
+    // Answered by hand in Unity, then staged.
+    team.write("bob", SCENE, &scene("1", "3.5", RED_RENDERER));
+    assert_eq!(team.gang("bob", &["git", "add", SCENE]).code, Some(0));
+    let sync = team.gang("bob", &["sync"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(sync.stdout.contains("Finished the merge"), "{sync:?}");
+    assert!(
+        sync.stderr.contains(" deleted Assets/Materials/Red.mat ("),
+        "{sync:?}"
+    );
+}

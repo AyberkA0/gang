@@ -633,3 +633,48 @@ fn scenes_the_policy_wants_locked_are_locked_on_save() {
         "{commit:?}"
     );
 }
+
+/// Field test (maze) R42: a lock taken since the last sync. `gang save`
+/// checked against the old lock table, committed, and only the push said
+/// no; now the save fetches the locks first.
+#[test]
+fn save_checks_locks_taken_since_the_last_sync() {
+    let team = Team::new(&["alice", "bob"]);
+    let lock = team.gang(
+        "alice",
+        &["lock", &format!("{SCENE}::Environment/Player"), "--yes"],
+    );
+    assert_eq!(lock.code, Some(0), "{lock:?}");
+    team.write("bob", SCENE, &scene("4", "0"));
+    let save = team.gang("bob", &["save", "-m", "player"]);
+    assert_eq!(save.code, Some(1), "{save:?}");
+    assert!(save.stderr.contains("is locked by alice"), "{save:?}");
+}
+
+/// Field test (maze) R41: a merge carries the lock owner's own changes to
+/// the object she locked. The commit hook took them for ours, stopped the
+/// merge, and suggested restoring the object, which would have undone her
+/// work. Only what our side adds on top of hers counts.
+#[test]
+fn a_merge_with_the_lock_owners_changes_is_not_stopped() {
+    let team = Team::new(&["alice", "bob"]);
+    let lock = team.gang(
+        "alice",
+        &["lock", &format!("{SCENE}::Environment/Player"), "--yes"],
+    );
+    assert_eq!(lock.code, Some(0), "{lock:?}");
+    team.write("alice", SCENE, &scene("3", "5"));
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "player and tree"]).code,
+        Some(0)
+    );
+
+    team.write("bob", SCENE, &scene("0", "7"));
+    let sync = team.gang("bob", &["sync", "-m", "tree"]);
+    assert_eq!(sync.code, Some(1), "{sync:?}");
+    let bang = team.gang("bob", &["bang", "--answer", "mine"]);
+    assert_eq!(bang.code, Some(0), "{bang:?}");
+    assert!(!bang.stderr.contains("locked by alice"), "{bang:?}");
+    assert!(!team.sandbox.dir.path().join("bob/.git/MERGE_HEAD").exists());
+    assert_eq!(team.read("bob", SCENE), scene("3", "7"));
+}
