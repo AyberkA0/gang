@@ -195,4 +195,6 @@ A binary store on a side ref ("a GANG branch for binaries", with pointer files i
 ### 5.6 Still open
 
 - Owner tasks (F1–F3): OAuth App, GitHub Actions billing, first release.
-- A second field test: three people, one on macOS, alternating who pushes first, a feature branch, a rebase day, and a gameplay smoke check.
+- A second field test: three people, one on macOS, alternating who pushes first, a feature branch, a rebase day, a stash pop onto a teammate's change, and a gameplay smoke check.
+- Checks that need a real Unity editor: golden merge fixtures (F5) and an opt-in batch-mode smoke test (E4). Rename impact analysis beyond `FormerlySerializedAs` (E6).
+- The test suite last ran on Windows only; GitHub's runners need the Actions billing (F2) to cover macOS and Linux again.
