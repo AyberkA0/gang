@@ -191,6 +191,6 @@ mod tests {
     fn numbers_look_like_unity() {
         assert_eq!(number(4.8), "4.8");
         assert_eq!(number(1e-9), "0");
-        assert_eq!(number(-0.7071067811865476), "-0.70710677");
+        assert_eq!(number(-std::f64::consts::FRAC_1_SQRT_2), "-0.70710677");
     }
 }

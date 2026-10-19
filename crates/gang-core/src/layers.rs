@@ -564,7 +564,7 @@ mod tests {
         assert_eq!(move_bit("4294967295", 8, 9), None);
         assert_eq!(move_bit("1", 8, 9), None);
         // Everything except layer 5: bit 9 is already set.
-        let all_but_5 = (u32::MAX & !(1 << 5)).to_string();
+        let all_but_5 = (!(1u32 << 5)).to_string();
         assert_eq!(move_bit(&all_but_5, 8, 9), None);
         assert!(covers_both(&all_but_5, 8, 9));
         assert!(!covers_both("4294967295", 8, 9));
