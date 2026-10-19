@@ -198,9 +198,30 @@ pub fn clone(invocation: &Invocation) -> Result<i32> {
     if let Some(slot) = args.iter_mut().find(|arg| **arg == source) {
         *slot = OsString::from(&url);
     }
+    // Partial clone (free, built into git and GitHub): large files from the
+    // history are downloaded when something needs them, not up front, so a
+    // project full of art does not cost every teammate every version.
+    let opt_out = args.iter().any(|a| a == "--no-partial");
+    args.retain(|a| a != "--no-partial");
+    let chosen = args.iter().any(|a| {
+        let a = a.to_string_lossy();
+        a.starts_with("--filter") || a.starts_with("--depth") || a == "--mirror" || a == "--bare"
+    });
+    let partial = !opt_out && !chosen && is_network_url(&url);
+    if partial {
+        args.insert(
+            0,
+            OsString::from(format!("--filter=blob:limit={PARTIAL_LIMIT}")),
+        );
+    }
     let code = run_git(invocation, "clone", &args)?;
     if code != 0 {
         return Ok(code);
+    }
+    if partial {
+        ui::done(format!(
+            "partial clone: older versions of files over {PARTIAL_LIMIT}B download only when needed (`gang clone --no-partial` for everything)"
+        ));
     }
 
     let dir = positional
@@ -211,6 +232,18 @@ pub fn clone(invocation: &Invocation) -> Result<i32> {
         Repo::open(&dir).with_context(|| format!("cloned, but cannot open {}", dir.display()))?;
     after_clone(&repo)?;
     Ok(0)
+}
+
+/// Files larger than this are left out of a clone's history until needed.
+const PARTIAL_LIMIT: &str = "5m";
+
+/// A remote that serves partial clones (GitHub, any https or ssh git host);
+/// local paths and `file://` copy everything anyway.
+fn is_network_url(url: &str) -> bool {
+    url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("ssh://")
+        || (url.contains('@') && url.contains(':') && !url.contains("://"))
 }
 
 fn run_git(invocation: &Invocation, command: &str, args: &[OsString]) -> Result<i32> {
@@ -340,6 +373,16 @@ mod tests {
             "git@github.com:a/b.git"
         );
         assert_eq!(expand_shorthand("../local/repo"), "../local/repo");
+    }
+
+    #[test]
+    fn partial_clone_only_over_the_network() {
+        assert!(is_network_url("https://github.com/a/b.git"));
+        assert!(is_network_url("git@github.com:a/b.git"));
+        assert!(is_network_url("ssh://git@host/a/b.git"));
+        assert!(!is_network_url("file:///tmp/remote.git"));
+        assert!(!is_network_url("/tmp/remote.git"));
+        assert!(!is_network_url("C:/remote.git"));
     }
 
     #[test]
