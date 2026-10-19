@@ -507,3 +507,38 @@ fn untouched_parts_keep_their_bytes() {
             .replace("m_Name: Environment", "m_Name: World")
     );
 }
+
+fn prefab_list(names: &[&str]) -> String {
+    let mut text = format!(
+        "{HEADER}--- !u!114 &11400000\nMonoBehaviour:\n  m_Name: DefaultNetworkPrefabs\n  List:\n"
+    );
+    for (n, name) in names.iter().enumerate() {
+        text.push_str(&format!(
+            "  - Override: 0\n    Prefab: {{fileID: 100{n}, guid: {name:0>32}, type: 3}}\n"
+        ));
+    }
+    text
+}
+
+/// Field test A3: both added network prefabs; nobody's additions may be lost.
+#[test]
+fn lists_both_sides_appended_to_keep_both() {
+    let base = ["a1", "a2"];
+    let ours = ["a1", "a2", "d00a", "eeee"];
+    let theirs = ["a1", "a2", "b0b1"];
+    let (text, merged) = auto(&prefab_list(&base), &prefab_list(&ours), &prefab_list(&theirs));
+    assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+    for name in ["a1", "a2", "d00a", "eeee", "b0b1"] {
+        assert!(text.contains(&format!("{name:0>32}")), "{name} lost:\n{text}");
+    }
+}
+
+/// Changing an existing item is not an addition: still a question.
+#[test]
+fn lists_with_changed_items_still_ask() {
+    let base = prefab_list(&["a1", "a2"]);
+    let ours = prefab_list(&["a1", "a2", "d00a"]);
+    let theirs = prefab_list(&["a1", "ffff", "b0b1"]);
+    let (_, merged) = auto(&base, &ours, &theirs);
+    assert!(!merged.conflicts.is_empty());
+}

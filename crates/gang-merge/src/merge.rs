@@ -676,6 +676,11 @@ impl Merger<'_> {
             }
             return Some(out);
         }
+        // Both sides only added items (network prefab lists, build lists):
+        // keep everything, ours first, theirs after their predecessors.
+        if had_base && only_additions(b, o) && only_additions(b, t) {
+            return Some(self.merge_identity_from(o, t, b));
+        }
         None
     }
 
@@ -1048,6 +1053,20 @@ fn item_key(item: &Item) -> Option<String> {
     map.get("guid")
         .and_then(Value::text)
         .map(|g| format!("guid:{g}"))
+}
+
+/// Whether `side` is `base` with items added: every base item is still
+/// there, unchanged and in the same order, and no item appears twice.
+fn only_additions(base: &[Item], side: &[Item]) -> bool {
+    let keys: Vec<String> = side.iter().map(|i| text_of(i.value())).collect();
+    let unique: HashSet<&String> = keys.iter().collect();
+    if unique.len() != keys.len() || side.len() <= base.len() {
+        return false;
+    }
+    let mut rest = keys.iter();
+    base.iter()
+        .map(|i| text_of(i.value()))
+        .all(|k| rest.any(|s| *s == k))
 }
 
 /// Whether every item of the lists has a key.
