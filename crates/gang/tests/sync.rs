@@ -1863,7 +1863,10 @@ fn doctor_notices_managed_files_an_older_gang_wrote() {
     let team = Team::new();
     let attributes = team.read("alice", ".gitattributes");
     let fresh = team.gang("alice", &["doctor"]);
-    assert!(!fresh.stdout.contains("differs from what this GANG writes"), "{fresh:?}");
+    assert!(
+        !fresh.stdout.contains("differs from what this GANG writes"),
+        "{fresh:?}"
+    );
     team.write(
         "alice",
         ".gitattributes",
@@ -1883,4 +1886,31 @@ fn doctor_notices_managed_files_an_older_gang_wrote() {
         "{fix:?}"
     );
     assert_eq!(team.read("alice", ".gitattributes"), attributes);
+}
+
+/// R38: main only takes pull requests (GitHub branch protection). The push
+/// is refused; GANG says how the commits get in, GANG's way.
+#[test]
+fn a_protected_branch_push_explains_the_way_in() {
+    let team = Team::new();
+    let hook = team.sandbox.dir.path().join("remote.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho \"error: GH006: Protected branch update failed for refs/heads/main.\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    team.write("alice", SCENE, &scene("3", "2.5", ""));
+    let sync = team.sync("alice", "move player");
+    assert_ne!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr
+            .contains("only takes changes through pull requests"),
+        "{sync:?}"
+    );
+    assert!(sync.stderr.contains("gang pr merge <number>"), "{sync:?}");
 }

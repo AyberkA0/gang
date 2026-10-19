@@ -246,3 +246,43 @@ fn a_pull_request_waits_for_unity_to_close() {
     let merge = team.gang("alice", &["pr", "merge", "1", "--into", "main"]);
     assert_eq!(merge.code, Some(0), "{merge:?}");
 }
+
+/// R39: a pull request from a fork into a protected base. Neither branch
+/// takes GANG's merge; nothing is left half done.
+#[test]
+fn a_fork_into_a_protected_base_changes_nothing() {
+    let team = Team::new();
+    team.open_pull_request(&scene(&[(200, "Tree", "0"), (300, "Rock", "5")]));
+    team.write(
+        "alice",
+        SCENE,
+        &scene(&[(200, "Tree", "0"), (400, "Lamp", "9")]),
+    );
+    assert_eq!(team.gang("alice", &["sync", "-m", "lamp"]).code, Some(0));
+    let hook = team.sandbox.dir.path().join("remote.git/hooks/pre-receive");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho \"remote: error: GH006: Protected branch update failed for refs/heads/main.\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let merge = team.gang("alice", &["pr", "merge", "1", "--into", "main"]);
+    assert_eq!(merge.code, Some(1), "{merge:?}");
+    assert!(
+        merge
+            .stderr
+            .contains("comes from a fork GANG cannot push to. Nothing was changed."),
+        "{merge:?}"
+    );
+    assert!(merge.stderr.contains("gang merge origin/main"), "{merge:?}");
+    let main = team.git("alice", &["rev-parse", "main"]).stdout;
+    let origin_main = team.git("alice", &["rev-parse", "origin/main"]).stdout;
+    assert_eq!(main, origin_main);
+    assert_eq!(team.git("alice", &["status", "--porcelain"]).stdout, "");
+    assert!(!team.read("alice", SCENE).contains("Rock"));
+}

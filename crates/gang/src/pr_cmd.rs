@@ -405,6 +405,26 @@ fn finish(repo: &Repo, state: &State) -> Result<i32> {
             repo.run(["reset", "-q", "--keep", &upstream])?;
             return to_branch(repo, state, head.trim(), Some(&stderr));
         }
+        if protected {
+            // A pull request from a fork into a protected base: neither
+            // branch takes GANG's merge. Leave nothing half done (R39).
+            repo.run(["reset", "-q", "--keep", &upstream])?;
+            let _ = std::fs::remove_file(state_path(repo));
+            let _ = repo.run([
+                "update-ref",
+                "-d",
+                &format!("refs/gang/pr/{}", state.number),
+            ]);
+            eprint!("{stderr}");
+            ui::warn(format!(
+                "{base} only takes merges through GitHub, and pull request #{} comes from a fork GANG cannot push to. Nothing was changed.",
+                state.number
+            ));
+            ui::hint(format!(
+                "Ask its author to merge {base} into their branch with GANG (`gang merge origin/{base}`, then `gang sync`); GitHub's Merge button then keeps that result."
+            ));
+            return Ok(1);
+        }
         let _ = std::fs::remove_file(state_path(repo));
         let _ = repo.run([
             "update-ref",

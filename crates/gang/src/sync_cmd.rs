@@ -190,6 +190,18 @@ fn push_failed(stderr: &str, outgoing: usize) {
         ui::hint("Either raise the LFS budget on GitHub, or stop using LFS for this project:");
         ui::hint("set [lfs] enabled = false in .gang/config.toml and run `gang ignore update`.");
         ui::hint("Commits that already contain LFS files still need them moved out of LFS first.");
+    } else if lower.contains("gh006")
+        || lower.contains("protected branch")
+        || lower.contains("through a pull request")
+    {
+        // A protected branch (R38): the commits go to a branch of their own
+        // and in through a pull request, merged with GANG's merge.
+        ui::hint("This branch only takes changes through pull requests on GitHub.");
+        ui::hint("Put your commits on a branch of their own and push it:");
+        ui::hint("  gang switch -c <name>   then   gang sync");
+        ui::hint(
+            "Open the pull request on GitHub, then merge it with `gang pr merge <number>` (GANG's merge, not the button alone).",
+        );
     } else {
         ui::hint("Fix the problem above, then run `gang sync` again.");
     }
