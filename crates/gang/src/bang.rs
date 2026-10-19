@@ -90,13 +90,21 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
         .collect();
     if files.is_empty() && others.is_empty() {
         println!("No conflicts to resolve.");
-        return Ok(0);
+        // Answers applied, but the merge (or rebase…) never finished.
+        return if args.list { Ok(0) } else { finish_operation(repo) };
     }
+    let mut rerere = load_rerere(repo);
     if args.reset {
+        // Forget this merge's answers and the remembered ones for the same
+        // questions, or they would come straight back (field test A9).
         for file in &mut files {
             file.answers.clear();
+            for question in &file.questions {
+                rerere.remove(&rerere_key(&file.path, question));
+            }
             store::save(repo, file)?;
         }
+        save_rerere(repo, &rerere);
     }
 
     if args.list || (!ui::interactive() && args.prefer.is_none()) {
@@ -111,7 +119,6 @@ pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
     let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
     let total: usize = files.iter().map(|f| f.questions.len()).sum::<usize>() + others.len();
     let mut asked = 0;
-    let mut rerere = load_rerere(repo);
 
     for file in &mut files {
         for question in file.questions.clone() {

@@ -515,3 +515,37 @@ fn an_unfinished_merge_is_not_published_as_own_work() {
     assert!(bob.contains(SCENE), "bob did change the scene: {}", who.stdout);
     assert!(!bob.contains(new_script), "Alice's file shown as Bob's: {}", who.stdout);
 }
+
+/// Field test A9: conflicts answered, merge commit never made. The next
+/// sync finishes that merge instead of asking for a new message.
+#[test]
+fn sync_finishes_a_merge_left_open() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("0", "3", ""));
+    assert_eq!(team.sync("alice", "alice jump").code, Some(0));
+    team.write("bob", SCENE, &scene("0", "4", ""));
+    assert_eq!(team.sync("bob", "bob jump").code, Some(1));
+    // Answered by hand and staged, but not committed.
+    team.write("bob", SCENE, &scene("0", "3", ""));
+    team.sandbox.run_in("bob", "git", &["add", SCENE]);
+    assert_eq!(team.gang("bob", &["bang", "--list"]).stdout, "No conflicts to resolve.\n");
+
+    let sync = team.gang("bob", &["sync"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(sync.stdout.contains("Finished the merge"), "{sync:?}");
+    let log = team.sandbox.run_in("bob", "git", &["log", "-1", "--format=%s"]);
+    assert!(log.stdout.starts_with("Merge"), "{log:?}");
+}
+
+/// Field test C2: a new, untracked file does not stop a sync.
+#[test]
+fn an_untracked_file_does_not_stop_sync() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("1", "2.5", ""));
+    assert_eq!(team.sync("alice", "move").code, Some(0));
+    team.write("bob", "Assets/Scripts/Draft.cs", "class Draft {}\n");
+    let sync = team.gang("bob", &["sync"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert_eq!(team.read("bob", SCENE), scene("1", "2.5", ""));
+    assert!(team.read("bob", "Assets/Scripts/Draft.cs").contains("Draft"));
+}

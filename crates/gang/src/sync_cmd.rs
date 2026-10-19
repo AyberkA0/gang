@@ -37,9 +37,24 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
         eprintln!("✗ A merge is still in progress. Run `gang bang` to finish it first.");
         return Ok(1);
     }
+    // Every conflict answered, but the merge commit was never made: finish
+    // that merge rather than starting a new save (field test A9).
+    if repo.git_dir().join("MERGE_HEAD").exists() {
+        let code = git::run_inherited(["commit", "--no-edit", "-q"])?;
+        if code != 0 {
+            return Ok(code);
+        }
+        ui::done("Finished the merge that was left open");
+    }
 
-    // 1. Uncommitted work.
-    let dirty = !repo.run(["status", "--porcelain"])?.trim().is_empty();
+    // 1. Uncommitted work. New files nobody tracks yet do not stand in the
+    // way of a merge; they are only saved when a message says so.
+    let untracked = if args.message.is_some() {
+        "--untracked-files=normal"
+    } else {
+        "--untracked-files=no"
+    };
+    let dirty = !repo.run(["status", "--porcelain", untracked])?.trim().is_empty();
     if dirty {
         let save = args.message.is_some()
             || (ui::interactive()
