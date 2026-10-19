@@ -735,6 +735,7 @@ dependencies = [
  "notify",
  "portable-pty",
  "ratatui",
+ "serde",
  "serde_json",
  "tempfile",
  "unity-yaml",

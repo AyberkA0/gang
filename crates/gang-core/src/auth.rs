@@ -164,6 +164,21 @@ fn http_date(text: &str) -> Option<i64> {
     crate::clock::parse(&format!("{year}-{month:02}-{day:0>2}T{time}Z"))
 }
 
+/// `GET` a GitHub API path (`/repos/owner/name/pulls/1`) as JSON.
+pub fn get_json(token: &str, path: &str) -> Result<serde_json::Value> {
+    let mut response = agent()
+        .get(format!("{}{path}", api_base()))
+        .header("Accept", "application/vnd.github+json")
+        .header("Authorization", &format!("Bearer {token}"))
+        .header("User-Agent", "gang")
+        .call()
+        .context("could not reach GitHub")?;
+    if !response.status().is_success() {
+        bail!("GitHub answered {} for {path}", response.status());
+    }
+    Ok(response.body_mut().read_json()?)
+}
+
 /// Creates a repository for the signed-in user; returns its clone URL.
 pub fn create_repo(token: &str, name: &str, private: bool) -> Result<String> {
     #[derive(Deserialize)]

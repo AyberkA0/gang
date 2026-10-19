@@ -206,6 +206,23 @@ Options:
   -h, --help  Print help
 ```
 
+## gang pr
+
+```text
+GitHub pull requests, merged with GANG
+
+Usage: gang pr merge [OPTIONS] [NUMBER]
+
+Arguments:
+  [NUMBER]  The pull request's number
+
+Options:
+      --into <INTO>  The branch to merge into (default: the pull request's base)
+      --continue     Finish a merge that stopped for questions
+      --abort        Give up a merge that stopped for questions
+  -h, --help         Print help
+```
+
 ## gang ignore
 
 ```text

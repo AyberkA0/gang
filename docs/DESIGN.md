@@ -1077,6 +1077,16 @@ Binary families (in LFS when it is on): images (`psd png jpg jpeg tga tif tiff e
 - Single-file, user-initiated rewrites such as `gang restore <file>::<object>` only warn: `Unity is open: let it reload Level1 before you keep editing.`
 - With an Editor plugin (later), GANG will know which scenes are open and automate save → close → sync → reopen.
 
+### 18.4 Pull requests
+
+GitHub's "Merge pull request" button merges Unity files line by line, without GANG's merge driver: it refuses when lines clash, and when they do not, it can write a scene that is valid YAML but wrong (two children appended at the same place of `m_Children`, a layer number taken on both sides, a prefab rebuilt on one side). `gang pr merge <number>` merges the pull request with GANG instead:
+
+1. Fetches `refs/pull/<n>/head` and the base branch from `origin`; asks GitHub's API for the base branch and title when a token is available (GANG's sign-in, or git's own credential helpers for github.com), otherwise uses `--into` or the current branch.
+2. Checks out the pull request's commits and merges the base into them, the way the pull request's author would sync: the layer pass moves the pull request's new layers (the base is already shared), the merge driver merges scenes object by object, and remaining questions go to `gang bang`. If questions remain without a terminal, it stops: `gang bang`, then `gang pr merge --continue` (or `--abort`).
+3. Records a merge commit on the base branch (first parent: the base, second: the merged pull request), fast-forwards the local base branch to it and pushes. GitHub marks the pull request as merged because its commits are now on the base.
+
+Teams that use pull requests should merge them with `gang pr merge`, not the button.
+
 ## 19. Configuration
 
 Precedence: command-line flag > `.git/gang/local.toml` > user config > `.gang/config.toml` > built-in defaults. Keys marked **policy** can only be set in the project config.

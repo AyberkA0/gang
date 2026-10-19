@@ -286,6 +286,18 @@ fn editor_guard(
     Ok(Some(1))
 }
 
+/// Merges `upstream` (not a rebase) the way `gang sync` does: the merge
+/// driver, `gang bang` on a terminal, the summary and the repairs.
+pub fn merge_from(
+    invocation: &Invocation,
+    repo: &Repo,
+    upstream: &str,
+    incoming: usize,
+    _label: &str,
+) -> Result<i32> {
+    merge(invocation, repo, upstream, false, incoming)
+}
+
 fn merge(
     invocation: &Invocation,
     repo: &Repo,

@@ -7,6 +7,7 @@ mod layers_cmd;
 mod locks_cmd;
 mod panel;
 mod plumbing;
+mod pr_cmd;
 mod prefabs_cmd;
 mod presence_cmd;
 mod save_cmd;
@@ -78,6 +79,7 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("unlock") => locks_cmd::unlock(invocation),
         Some("locks") => locks_cmd::list(invocation),
         Some("layers") => layers_cmd::run(invocation),
+        Some("pr") => pr_cmd::run(invocation),
         Some("doctor") => doctor_cmd::run(invocation),
         Some("auth") => auth_cmd::run(invocation),
         Some("credential") => auth_cmd::credential(invocation),
