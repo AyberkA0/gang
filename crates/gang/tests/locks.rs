@@ -438,3 +438,28 @@ fn force_unlock_tells_the_team() {
     let who = team.gang("alice", &["--json", "who"]);
     assert!(who.stdout.contains("force_unlock"), "{}", who.stdout);
 }
+
+/// Field test A2: a save refused by a lock must not stage anything.
+#[test]
+fn a_refused_save_leaves_the_index_alone() {
+    let team = Team::new(&["alice", "bob"]);
+    assert_eq!(
+        team.gang("alice", &["lock", "Assets/Art/Notes.txt", "-m", "rewriting"])
+            .code,
+        Some(0)
+    );
+    team.gang("bob", &["locks"]);
+    team.write("bob", "Assets/Art/Notes.txt", "bob's notes\n");
+    team.write(
+        "bob",
+        "Assets/Scripts/CameraFollow.cs",
+        "class CameraFollow { UnityEngine.Transform target; int x; }\n",
+    );
+    let save = team.gang("bob", &["save", "-m", "notes"]);
+    assert_eq!(save.code, Some(1), "{save:?}");
+    assert!(save.stderr.contains("locked by alice"), "{save:?}");
+    let staged = team.git("bob", &["diff", "--cached", "--name-only"]);
+    assert_eq!(staged.stdout, "", "a refused save staged files");
+    let changed = team.git("bob", &["diff", "--name-only"]);
+    assert!(changed.stdout.contains("Assets/Art/Notes.txt"), "{changed:?}");
+}

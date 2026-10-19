@@ -16,9 +16,9 @@ use crate::{ui, wrap};
 #[derive(Parser)]
 #[command(name = "gang save")]
 pub struct SaveArgs {
-    /// Commit message
+    /// Commit message; several -m become paragraphs, as in git
     #[arg(short, long)]
-    message: Option<String>,
+    message: Vec<String>,
     /// Push after committing
     #[arg(long)]
     push: bool,
@@ -34,6 +34,29 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
     let repo = Repo::discover(&invocation.git_globals)?.context("not inside a git repository")?;
     setup::ensure_installed(&repo)?;
 
+    // Staging everything would mark unanswered conflicts as resolved.
+    let unmerged = crate::bang::unmerged(&repo)?;
+    if !unmerged.is_empty() {
+        eprintln!(
+            "✗ A merge is in progress and {} file{} still {} conflicts:",
+            unmerged.len(),
+            if unmerged.len() == 1 { "" } else { "s" },
+            if unmerged.len() == 1 { "has" } else { "have" }
+        );
+        for path in unmerged.iter().take(10) {
+            eprintln!("    {path}");
+        }
+        ui::hint("Answer them first: gang bang");
+        return Ok(1);
+    }
+    // A refused save must leave the index exactly as it was.
+    let index_before = repo.try_run(["write-tree"])?.map(|t| t.trim().to_owned());
+    let restore_index = |repo: &Repo| {
+        if let Some(tree) = &index_before {
+            let _ = repo.run(["read-tree", tree]);
+        }
+    };
+
     let add_args: Vec<OsString> = if args.paths.is_empty() {
         vec!["-A".into()]
     } else {
@@ -43,6 +66,7 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
     };
     let code = wrap::add(invocation, &repo, &add_args)?;
     if code != 0 {
+        restore_index(&repo);
         return Ok(code);
     }
     if guards::staged_changes(&repo)?.is_empty() {
@@ -50,20 +74,26 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
         return Ok(0);
     }
 
-    let message = match args.message {
-        Some(message) => message,
-        None if ui::interactive() => {
+    let message = match args.message.as_slice() {
+        [] if ui::interactive() => {
             print!("Message: ");
             io::stdout().flush()?;
             let mut line = String::new();
             io::stdin().lock().read_line(&mut line)?;
             let line = line.trim().to_owned();
             if line.is_empty() {
+                restore_index(&repo);
                 bail!("a message is needed to save");
             }
             line
         }
-        None => bail!("a message is needed: gang save -m \"…\""),
+        [] => {
+            restore_index(&repo);
+            bail!("a message is needed: gang save -m \"…\"")
+        }
+        paragraphs => paragraphs.join("
+
+"),
     };
 
     let op = safety::begin(&repo, "save", false)?;
@@ -71,6 +101,10 @@ pub fn save(invocation: &Invocation) -> Result<i32> {
     commit.extend(["commit".into(), "-q".into(), "-m".into(), message.into()]);
     let code = git::run_inherited(&commit)?;
     if code != 0 {
+        restore_index(&repo);
+        if index_before.is_some() {
+            ui::hint("Nothing was staged or committed; your changes are where they were.");
+        }
         return Ok(code);
     }
     safety::finish(&repo, op)?;
