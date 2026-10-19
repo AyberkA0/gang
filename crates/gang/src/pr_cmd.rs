@@ -193,6 +193,17 @@ fn start(
             "save or stash your changes first; merging a pull request needs a clean working tree"
         );
     }
+    // Merging switches the working tree to the pull request's files: not
+    // under an open editor, which would write its own copies back.
+    if !invocation.options.ignore_editor
+        && gang_core::unity::find_projects(repo.root())
+            .iter()
+            .any(|p| gang_core::unity::is_editor_open(&p.path(repo.root())))
+    {
+        bail!(
+            "Unity is open; merging a pull request switches the project's files. Save your work, close Unity, and run it again"
+        );
+    }
     if state_path(repo).exists() {
         bail!(
             "a pull request merge is waiting: answer it (`gang bang`), then `gang pr merge --continue`, or `gang pr merge --abort`"

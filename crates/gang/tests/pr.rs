@@ -227,3 +227,22 @@ fn a_protected_base_gets_the_merge_on_the_pull_request_branch() {
     let origin_main = team.git("alice", &["rev-parse", "origin/main"]).stdout;
     assert_eq!(main, origin_main);
 }
+
+/// Thought experiment R11: merging a pull request switches the project's
+/// files, so it waits for Unity to close.
+#[test]
+fn a_pull_request_waits_for_unity_to_close() {
+    let team = Team::new();
+    team.open_pull_request(&scene(&[(200, "Tree", "0"), (300, "Rock", "5")]));
+    let temp = team.sandbox.dir.path().join("alice").join("Temp");
+    std::fs::create_dir_all(&temp).unwrap();
+    let file = std::fs::File::create(temp.join("UnityLockfile")).unwrap();
+    let mut lock = fd_lock::RwLock::new(file);
+    let held = lock.write().unwrap();
+    let merge = team.gang("alice", &["pr", "merge", "1", "--into", "main"]);
+    assert_ne!(merge.code, Some(0), "{merge:?}");
+    assert!(merge.stderr.contains("Unity is open"), "{merge:?}");
+    drop(held);
+    let merge = team.gang("alice", &["pr", "merge", "1", "--into", "main"]);
+    assert_eq!(merge.code, Some(0), "{merge:?}");
+}
