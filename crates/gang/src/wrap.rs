@@ -82,7 +82,36 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
             let before = repo
                 .try_run(["rev-parse", "-q", "--verify", "HEAD"])?
                 .map(|h| h.trim().to_owned());
-            let code = git_command(invocation, &invocation.args)?;
+            // `stash pop` / `apply`: git's "theirs" is the user's stash (R32).
+            let args = strings(&invocation.args);
+            let stash_apply = (name == "stash")
+                .then(|| positionals(&args, &[]))
+                .and_then(|p| match p.first().map(String::as_str) {
+                    Some(op @ ("pop" | "apply")) => {
+                        let which = p.get(1).cloned().unwrap_or_else(|| "stash@{0}".to_owned());
+                        Some((op.to_owned(), which))
+                    }
+                    _ => None,
+                });
+            repo.set_stash_mark(None);
+            let code = match &stash_apply {
+                Some((op, which)) => {
+                    let sha = repo
+                        .try_run(["rev-parse", "-q", "--verify", which.as_str()])?
+                        .map(|s| s.trim().to_owned())
+                        .unwrap_or_default();
+                    repo.set_stash_mark(Some(&format!("{op} {sha}")));
+                    let mut all = invocation.git_globals.clone();
+                    all.extend(invocation.command.clone());
+                    all.extend(invocation.args.iter().cloned());
+                    let code = git::run_inherited_env(&all, &[("GANG_STASH_APPLY", op)])?;
+                    if crate::bang::unmerged(&repo)?.is_empty() {
+                        repo.set_stash_mark(None);
+                    }
+                    code
+                }
+                None => git_command(invocation, &invocation.args)?,
+            };
             if aborting {
                 gang_core::store::clear_all(&repo)?;
                 return Ok(code);

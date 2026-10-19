@@ -1675,3 +1675,97 @@ fn a_folder_emptied_by_a_save_goes_with_its_last_asset() {
         "{commit:?}"
     );
 }
+
+/// Thought experiment R32: `gang stash pop` onto teammates' changes. git
+/// calls the committed version "ours" and the stash "theirs", so "mine"
+/// picked the teammate's value. The stash is the user's own work: "mine"
+/// now means the stash, and once every conflict is answered the pop is
+/// complete and the stash is dropped, as after a clean pop.
+#[test]
+fn a_stash_pop_asks_with_the_stash_as_mine() {
+    let team = Team::new();
+    team.write("bob", SCENE, &scene("0", "3", ""));
+    team.write(
+        "bob",
+        "Assets/Scripts/Player.cs",
+        "class Player
+{
+    int speed = 3;
+}
+",
+    );
+    assert_eq!(team.gang("bob", &["stash"]).code, Some(0));
+    team.write("alice", SCENE, &scene("0", "4", ""));
+    team.write(
+        "alice",
+        "Assets/Scripts/Player.cs",
+        "class Player
+{
+    int speed = 4;
+}
+",
+    );
+    assert_eq!(team.sync("alice", "alice tuning").code, Some(0));
+    assert_eq!(team.gang("bob", &["pull", "-q"]).code, Some(0));
+
+    let pop = team.gang("bob", &["stash", "pop"]);
+    assert_eq!(pop.code, Some(1), "{pop:?}");
+    let first = team.gang("bob", &["bang", "--answer", "mine"]);
+    assert!(first.stdout.contains("the committed version"), "{first:?}");
+    let second = team.gang("bob", &["bang", "--answer", "mine"]);
+    assert_eq!(second.code, Some(0), "{second:?}");
+    assert!(team.read("bob", SCENE).contains("jumpHeight: 3"));
+    assert!(
+        team.read("bob", "Assets/Scripts/Player.cs")
+            .contains("speed = 3")
+    );
+    assert!(
+        second.stderr.contains("The stash is applied and dropped")
+            || second.stdout.contains("The stash is applied and dropped"),
+        "{second:?}"
+    );
+    assert_eq!(team.gang("bob", &["git", "stash", "list"]).stdout, "");
+    // Unstaged, as after a clean pop.
+    let status = team.gang("bob", &["git", "status", "--porcelain"]).stdout;
+    assert!(status.contains(" M Assets/Scenes/Level1.unity"), "{status}");
+
+    // Plain git: the stash names its side in the markers; it stays in the list.
+    team.write(
+        "bob",
+        "Assets/Scripts/Player.cs",
+        "class Player
+{
+    int speed = 5;
+}
+",
+    );
+    assert_eq!(team.gang("bob", &["git", "stash", "-q"]).code, Some(0));
+    team.write(
+        "bob",
+        "Assets/Scripts/Player.cs",
+        "class Player
+{
+    int speed = 6;
+}
+",
+    );
+    assert_eq!(
+        team.gang("bob", &["git", "commit", "-q", "-am", "six"])
+            .code,
+        Some(0)
+    );
+    assert_eq!(
+        team.gang("bob", &["git", "stash", "pop", "-q"]).code,
+        Some(1)
+    );
+    let answer = team.gang("bob", &["bang", "--answer", "mine"]);
+    assert_eq!(answer.code, Some(0), "{answer:?}");
+    assert!(
+        team.read("bob", "Assets/Scripts/Player.cs")
+            .contains("speed = 5")
+    );
+    assert!(
+        answer.stderr.contains("gang stash drop") || answer.stdout.contains("gang stash drop"),
+        "{answer:?}"
+    );
+}

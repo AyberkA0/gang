@@ -102,7 +102,7 @@ pub fn install(repo: &Repo) -> Result<Vec<String>> {
         ),
         (
             "merge.gang.driver",
-            format!("{gang} merge-driver unity %O %A %B %P"),
+            format!("{gang} merge-driver unity %O %A %B %P %Y"),
         ),
         (
             "merge.gang-ignore.name",
@@ -115,7 +115,7 @@ pub fn install(repo: &Repo) -> Result<Vec<String>> {
         ("merge.gang-json.name", "GANG merge for JSON".to_owned()),
         (
             "merge.gang-json.driver",
-            format!("{gang} merge-driver json %O %A %B %P"),
+            format!("{gang} merge-driver json %O %A %B %P %Y"),
         ),
     ];
     for (key, value) in settings {
@@ -176,7 +176,7 @@ fn marker_path(repo: &Repo) -> PathBuf {
 
 /// Changes when the installed drivers or hooks change, so existing clones
 /// are set up again.
-const SETUP_VERSION: u32 = 2;
+const SETUP_VERSION: u32 = 3;
 
 fn marker_text(gang: &str) -> String {
     format!("{gang}\n{}\n{SETUP_VERSION}\n", env!("CARGO_PKG_VERSION"))

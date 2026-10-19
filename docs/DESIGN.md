@@ -866,6 +866,7 @@ The effect, in the field test's terms: whoever **names** a layer first keeps its
   3 conflicts found. Resolve them now? [Y/n]
   ```
 - On a non-TTY it never prompts; it prints `Run 'gang bang' to resolve 3 conflicts.` and exits `1`.
+- **"Mine" is always the user's own work.** git swaps its sides during a rebase (its "ours" is the upstream commit) and during `git stash pop` / `apply` (its "ours" is the committed version, "theirs" the stash). GANG swaps them back in the merge driver and in bang, so "mine" is the replayed commit or the stash. A stash apply is recognised from `gang stash`, from git's side name "Stashed changes" (passed to the driver as `%Y` by git 2.44 and newer, and written into text conflict markers by every version), and the other side is called "the committed version". When every conflict of a `gang stash pop` is answered the pop is complete: the stash is dropped, as after a clean pop, and its id is printed to bring it back; after `apply` or a plain `git stash pop` it stays in the list.
 
 ### 15.2 Screen
 

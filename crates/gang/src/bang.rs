@@ -580,10 +580,15 @@ fn resolve_plain_file(
     let Some(text) = text else {
         return resolve_binary(repo, path, answer, n, total);
     };
-    let rebasing = repo.rebasing();
+    // During a rebase the first side of a hunk is the upstream commit, and
+    // during a stash apply the committed version ("Updated upstream").
+    if text.contains("\n>>>>>>> Stashed changes") && repo.stash_mark().is_none() {
+        // A plain `git stash pop`: remembered for the hunks written back.
+        repo.set_stash_mark(Some("git"));
+    }
+    let rebasing = repo.sides_swapped();
     let mut hunks = parse_hunks(&text);
     if rebasing {
-        // During a rebase the first side of a hunk is the upstream commit.
         for part in &mut hunks {
             if let Part::Hunk { ours, theirs } = part {
                 std::mem::swap(ours, theirs);
@@ -682,8 +687,9 @@ fn resolve_binary(
     n: usize,
     total: usize,
 ) -> Result<Plain> {
-    // git's --ours / stage 2 is the upstream commit during a rebase.
-    let (mine, theirs, theirs_stage) = if repo.rebasing() {
+    // git's --ours / stage 2 is the upstream commit during a rebase, and
+    // the committed version during a stash apply.
+    let (mine, theirs, theirs_stage) = if repo.sides_swapped() {
         ("--theirs", "--ours", 2)
     } else {
         ("--ours", "--theirs", 3)
@@ -823,6 +829,8 @@ fn finish_operation(repo: &Repo) -> Result<i32> {
             )
         } else if git_dir.join("MERGE_HEAD").exists() {
             ("Commit the merge", vec!["commit", "--no-edit", "-q"])
+        } else if let Some(mark) = repo.stash_mark() {
+            return finish_stash(repo, &mark);
         } else {
             return Ok(0);
         };
@@ -854,6 +862,32 @@ fn finish_operation(repo: &Repo) -> Result<i32> {
         }
         return Ok(code);
     }
+    Ok(0)
+}
+
+/// Every conflict of a stash apply answered (R32). A `gang stash pop` is
+/// then complete: the stash is dropped, as git does when a pop applies
+/// cleanly, and its id is printed to bring it back. After `apply`, or a
+/// plain `git stash pop`, it stays in the list.
+fn finish_stash(repo: &Repo, mark: &str) -> Result<i32> {
+    repo.set_stash_mark(None);
+    // A pop leaves the stash's changes unstaged, as git does.
+    let _ = repo.run(["reset", "-q"]);
+    let Some(sha) = mark.strip_prefix("pop ") else {
+        ui::hint("The stash is still in the list: `gang stash drop` once you no longer need it.");
+        return Ok(0);
+    };
+    let list = repo
+        .run(["stash", "list", "--format=%H"])
+        .unwrap_or_default();
+    let Some(index) = list.lines().position(|line| line.trim() == sha) else {
+        return Ok(0);
+    };
+    repo.run(["stash", "drop", "-q", &format!("stash@{{{index}}}")])?;
+    let short = &sha[..sha.len().min(10)];
+    ui::done(format!(
+        "The stash is applied and dropped (`gang stash apply {short}` brings it back)"
+    ));
     Ok(0)
 }
 

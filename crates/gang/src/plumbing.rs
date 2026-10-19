@@ -22,6 +22,10 @@ pub fn merge_driver(invocation: &Invocation) -> Result<i32> {
         bail!("usage: gang merge-driver <unity|ignore> <base> <ours> <theirs> [path]");
     };
     let path = rest.first().map(String::as_str).unwrap_or("");
+    // git 2.44 and newer name the sides (%Y): "Stashed changes" is the
+    // stash of a `git stash pop` / `apply` (R32).
+    let stash = rest.get(1).is_some_and(|label| label == "Stashed changes")
+        || std::env::var_os("GANG_STASH_APPLY").is_some();
     match kind.as_str() {
         "ignore" => {
             let kind = if path.ends_with(".gitattributes") {
@@ -35,7 +39,7 @@ pub fn merge_driver(invocation: &Invocation) -> Result<i32> {
             fs::write(ours, merged)?;
             Ok(0)
         }
-        "unity" | "json" => semantic_merge(kind, base, ours, theirs, path),
+        "unity" | "json" => semantic_merge(kind, base, ours, theirs, path, stash),
         other => bail!("unknown merge driver kind {other:?}"),
     }
 }
@@ -44,7 +48,14 @@ pub fn merge_driver(invocation: &Invocation) -> Result<i32> {
 /// do not parse get git's text merge only when it is clean: conflict
 /// markers are never written into these files (DESIGN.md G2). Otherwise
 /// the file keeps the current side and `gang bang` asks for the whole file.
-fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) -> Result<i32> {
+fn semantic_merge(
+    kind: &str,
+    base: &str,
+    ours: &str,
+    theirs: &str,
+    path: &str,
+    stash: bool,
+) -> Result<i32> {
     let read = |p: &str| fs::read(p).with_context(|| format!("could not read {p}"));
     let (b, o, t) = (read(base)?, read(ours)?, read(theirs)?);
     if [&b, &o, &t].iter().any(|bytes| bytes.contains(&0)) {
@@ -65,12 +76,23 @@ fn semantic_merge(kind: &str, base: &str, ours: &str, theirs: &str, path: &str) 
     } else {
         store::Format::Unity
     };
-    let theirs_name = std::env::var("GANG_THEIRS_NAME").unwrap_or_else(|_| other_side_name(&repo));
+    if stash && repo.stash_mark().is_none() {
+        // Plain `git stash pop`: let `gang bang` know whose side is whose.
+        repo.set_stash_mark(Some("git"));
+    }
+    let theirs_name = if stash {
+        "the committed version".to_owned()
+    } else {
+        std::env::var("GANG_THEIRS_NAME").unwrap_or_else(|_| other_side_name(&repo))
+    };
     // During a rebase git's "ours" is the upstream commit and "theirs" the
-    // user's own commit being replayed. GANG's "mine" is always the user's
-    // side, so the versions swap; the result still goes to git's <ours>.
+    // user's own commit being replayed; during a stash apply "ours" is the
+    // committed version and "theirs" the stash. GANG's "mine" is always the
+    // user's side, so the versions swap; the result still goes to <ours>.
     let rebasing = repo.rebasing();
-    let (b, mine, upstream) = if rebasing {
+    let (b, mine, upstream) = if stash && !rebasing {
+        (b, t, o)
+    } else if rebasing {
         // A layer the pass moved before this rebase: the user's commits are
         // replayed with it at its new number (DESIGN.md §14.2).
         let replay = |text: String| layers::replay_moves(&repo, path, &text).unwrap_or(text);

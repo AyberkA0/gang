@@ -56,6 +56,52 @@ impl Repo {
         self.rebase_dir().is_some()
     }
 
+    /// Whether a `git stash pop` / `apply` stopped with conflicts here
+    /// (HARDENING.md R32). Git names the committed version "ours" and the
+    /// stash, the user's own work, "theirs". GANG marks such an apply (the
+    /// wrapper before running it, the merge driver when git calls the sides
+    /// "Stashed changes"); the mark counts only while files are unmerged and
+    /// no merge, rebase, cherry-pick or revert is in progress.
+    pub fn applying_stash(&self) -> bool {
+        self.stash_mark().is_some()
+            && !self.rebasing()
+            && ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]
+                .iter()
+                .all(|head| !self.git_dir.join(head).exists())
+            && self
+                .try_run(["diff", "--name-only", "--diff-filter=U"])
+                .ok()
+                .flatten()
+                .is_some_and(|out| !out.trim().is_empty())
+    }
+
+    /// Whether the user's own side is git's "theirs": during a rebase or a
+    /// stash apply.
+    pub fn sides_swapped(&self) -> bool {
+        self.rebasing() || self.applying_stash()
+    }
+
+    /// The stash apply GANG marked: `pop <sha>`, `apply <sha>`, or `git`
+    /// for one plain git started.
+    pub fn stash_mark(&self) -> Option<String> {
+        std::fs::read_to_string(self.gang_dir().join("stash-apply"))
+            .ok()
+            .map(|t| t.trim().to_owned())
+    }
+
+    pub fn set_stash_mark(&self, mark: Option<&str>) {
+        let path = self.gang_dir().join("stash-apply");
+        match mark {
+            Some(mark) => {
+                let _ = std::fs::create_dir_all(self.gang_dir());
+                let _ = std::fs::write(path, format!("{mark}\n"));
+            }
+            None => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
     /// The commit a rebase in progress replays onto.
     pub fn rebase_onto(&self) -> Option<String> {
         let onto = std::fs::read_to_string(self.rebase_dir()?.join("onto")).ok()?;

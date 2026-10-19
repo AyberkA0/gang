@@ -119,6 +119,22 @@ where
     Ok(exit_code(status))
 }
 
+/// [`run_inherited`] with extra environment variables for git and the
+/// merge drivers it starts.
+pub fn run_inherited_env<I, S>(args: I, env: &[(&str, &str)]) -> Result<i32, GitError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let _ = ctrlc::set_handler(|| {});
+    let status = Command::new("git")
+        .args(args)
+        .envs(env.iter().copied())
+        .status()
+        .map_err(spawn_error)?;
+    Ok(exit_code(status))
+}
+
 /// The exit code to pass on for a finished process. A process killed by a
 /// signal maps to `128 + signal`, as shells report it.
 pub fn exit_code(status: ExitStatus) -> i32 {
