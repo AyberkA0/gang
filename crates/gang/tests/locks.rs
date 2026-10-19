@@ -493,5 +493,8 @@ fn unlocking_unpushed_binary_work_asks_first() {
     assert_eq!(unlock.code, Some(1), "{unlock:?}");
     assert!(unlock.stdout.contains("not pushed yet"), "{unlock:?}");
     assert!(team.gang("alice", &["locks"]).stdout.contains("Brick.png"));
-    assert_eq!(team.gang("alice", &["unlock", texture, "--yes"]).code, Some(0));
+    assert_eq!(
+        team.gang("alice", &["unlock", texture, "--yes"]).code,
+        Some(0)
+    );
 }

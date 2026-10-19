@@ -815,7 +815,9 @@ pub fn unlock(invocation: &Invocation) -> Result<i32> {
             .keys()
             .filter(|path| attributes::is_binary_path(path))
             .filter(|path| {
-                wanted.iter().any(|(_, t)| t.as_ref().is_some_and(|t| t.covers_file(path)))
+                wanted
+                    .iter()
+                    .any(|(_, t)| t.as_ref().is_some_and(|t| t.covers_file(path)))
             })
             .collect();
         if !at_risk.is_empty() {
