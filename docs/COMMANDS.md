@@ -69,7 +69,7 @@ Arguments:
   [PATHS]...  Only save these paths (default: everything)
 
 Options:
-  -m, --message <MESSAGE>  Commit message
+  -m, --message <MESSAGE>  Commit message; several -m become paragraphs, as in git
       --push               Push after committing
   -h, --help               Print help
 ```
@@ -174,6 +174,7 @@ Options:
       --bake   Release a scene's bake lock
       --all    Release all your locks
       --force  Release someone else's lock (the team is told)
+  -y, --yes    Release even files with changes that are not pushed yet
   -h, --help   Print help
 ```
 

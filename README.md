@@ -14,6 +14,8 @@ A terminal version-control tool for Unity teams, built on top of git and GitHub.
 
 Early, working. All five milestones of the [plan](docs/PLAN.md) are reached: safe git, team awareness, scene merging, locks, and release tooling. The test suite passes on macOS, Windows and Linux, and the Unity YAML parser round-trips two public Unity projects (11,000 files) byte for byte. Not yet used by a team in Unity day to day.
 
+A two-person field test on a real Unity 6 project (101 commits, 19 merges, no broken scene) found bugs that are being fixed; see [Hardening](docs/HARDENING.md). Binaries stay out of Git LFS by default (`[lfs] enabled = false`), so GANG costs nothing on GitHub.
+
 Still open: registering GANG's GitHub OAuth App (until then, sign in with your existing git credentials), merge fixtures made in a real Unity editor, and a Homebrew tap / Scoop bucket.
 
 ## Install
@@ -30,7 +32,7 @@ On Windows (PowerShell):
 irm https://raw.githubusercontent.com/AyberkA0/gang/main/install.ps1 | iex
 ```
 
-From source (Rust 1.85 or newer, git 2.34 or newer, Git LFS):
+From source (Rust 1.85 or newer, git 2.34 or newer; Git LFS only if your project turns it on):
 
 ```bash
 cargo install --path crates/gang
@@ -63,3 +65,4 @@ Teammates join with `gang clone owner/repo`.
 - [Commands](docs/COMMANDS.md)
 - [Design](docs/DESIGN.md) — how it works
 - [Plan](docs/PLAN.md) — what is done and what is next
+- [Hardening](docs/HARDENING.md) — field-test findings, blind spots and the fix plan

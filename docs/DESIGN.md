@@ -738,8 +738,10 @@ Layers are referenced by number. When two people give the same layer index diffe
 
 | Case | Condition | Action |
 |---|---|---|
-| Index collision | `O[i] ≠ B[i]`, `T[i] ≠ B[i]`, `O[i] ≠ T[i]`, both non-empty | Move ours from `i` to `k` = lowest index empty in B, O, T and not already chosen |
-| Same name, different index | Ours added name *n* at `i`, theirs added *n* at `j ≠ i` | Unify on theirs: remap ours `i → j` |
+| Index collision | `B[i]` empty, `O[i]` and `T[i]` non-empty and different | Move ours from `i` to `k` = lowest index empty in B, O, T and not already chosen |
+| Same name, different index | Ours added name *n* at `i` (`B[i]` empty), theirs added *n* at `j ≠ i` | Unify on theirs: remap ours `i → j` |
+| Both renamed one layer | `B[i]` non-empty, `O[i]` and `T[i]` both renamed it | **Not a collision**: it is one layer with two names. Nothing moves; the TagManager merge asks which name |
+| A teammate already moved a layer | `B[i] = O[i] = n`, theirs has *n* at `j ≠ i` (their remap) | Follow it: our commits' new uses of `i` move to `j`; our TagManager is left to the merge. Nothing is committed when our commits did not use `i` |
 | No free index | All of 8–31 used | Fall back to a bang question |
 
 **Rewrite of our side** (only values our commits introduced, i.e. that differ from B at the same property):
@@ -748,7 +750,7 @@ Layers are referenced by number. When two people give the same layer index diffe
 |---|---|
 | `TagManager.asset` | Move the name from `i` to `k` |
 | Scenes, prefabs, assets | `GameObject.m_Layer == i` → `k` |
-| | LayerMask values (`m_Bits`, e.g. camera and light culling masks, script `LayerMask` fields): move bit `i` to `k`. All-ones masks ("Everything") are left alone |
+| | LayerMask values (`m_Bits`, e.g. camera and light culling masks, script `LayerMask` fields): move bit `i` to `k`. Masks that already have bit `k` ("Everything", "everything except …") are left alone and listed under "Needs review": clearing bit `i` would drop the other side's layer |
 | | Prefab overrides: `m_Modifications` entries with `propertyPath: m_Layer` or a `m_Bits` path |
 | | Script `int` fields whose name contains "layer" and whose value is `i` (heuristic, listed in the report) |
 | `DynamicsManager.asset`, `Physics2DSettings.asset` | Collision matrix: listed under "Needs review" (the matrix encoding is not rewritten automatically yet) |
@@ -776,7 +778,9 @@ Needs review:
 Gang-Remap: layer 8 -> 9
 ```
 
-The merge then proceeds and `TagManager.asset` merges without a conflict. Whoever pushes first keeps the index; the others' GANG moves their layer when they sync.
+The merge then proceeds and `TagManager.asset` merges without a conflict. Whoever pushes first keeps the index; the others' GANG moves their layer when they sync. The sync output always ends the remap with the review list, or "Nothing needs review."
+
+Known gaps (see [HARDENING.md](HARDENING.md) §1.1): the pass does not run for `pull`, `rebase` or `cherry-pick` yet, collision matrices are not rewritten, and only the C# patterns above are recognized.
 
 ### 14.3 Packages
 
@@ -999,7 +1003,9 @@ Managed the same way (block + project rules):
 # <<< gang managed
 ```
 
-Default LFS families: images (`psd png jpg jpeg tga tif tiff exr hdr`), models (`fbx obj blend max ma mb`), audio (`wav mp3 ogg aif aiff flac`), video (`mp4 mov webm`), fonts (`ttf otf`), archives (`zip 7z`), native libraries (`dll so a dylib bundle`), `*.bytes`, and known binary Unity outputs (`LightingData.asset`, lightmap `.exr`).
+**Git LFS is off by default** (`[lfs] enabled = false`): GitHub's LFS storage is paid and has a quota, and one full quota stops every push of the team. With LFS off, the same file types get `binary` instead (`*.[pP][nN][gG] binary`), so git never treats them as text and never tries to merge them. `gang init` and `gang clone` then neither install nor pull LFS, and the hooks do not require git-lfs. A project without the `[lfs]` setting (set up by an older GANG) keeps LFS when its `.gitattributes` already uses it. `gang doctor` warns when LFS is off but files in the branch are still stored in LFS.
+
+Binary families (in LFS when it is on): images (`psd png jpg jpeg tga tif tiff exr hdr`), models (`fbx obj blend max ma mb`), audio (`wav mp3 ogg aif aiff flac`), video (`mp4 mov webm`), fonts (`ttf otf`), archives (`zip 7z`), native libraries (`dll so a dylib bundle`), `*.bytes`, and known binary Unity outputs (`LightingData.asset`, lightmap `.exr`).
 
 ## 18. Sync, undo and safety
 
@@ -1074,6 +1080,9 @@ auto_remap = true
 [sync]
 strategy = "merge"                    # merge | rebase
 editor_open = "block"                 # block | warn
+
+[lfs]
+enabled = false                       # policy: store binaries in Git LFS (paid on GitHub)
 ```
 
 ## 20. Output and UX conventions
