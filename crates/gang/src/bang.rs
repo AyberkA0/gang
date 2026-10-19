@@ -463,13 +463,19 @@ fn details(file: &Pending, q: &Question) -> String {
 fn both(q: &Question) -> Option<(String, String)> {
     let (b, o, t) = (q.base.as_deref()?, q.ours.as_deref()?, q.theirs.as_deref()?);
     if let (Ok(b), Ok(o), Ok(t)) = (
-        b.trim().parse::<f32>(),
-        o.trim().parse::<f32>(),
-        t.trim().parse::<f32>(),
+        b.trim().parse::<f64>(),
+        o.trim().parse::<f64>(),
+        t.trim().parse::<f64>(),
     ) {
         let sum = b + (o - b) + (t - b);
-        let text = format!("{b} {} {} = {sum}", signed(o - b), signed(t - b));
-        return Some((text, sum.to_string()));
+        let text = format!(
+            "{} {} {} = {}",
+            tidy(b),
+            signed(o - b),
+            signed(t - b),
+            tidy(sum)
+        );
+        return Some((text, tidy(sum)));
     }
     let fields = |s: &str| unity_yaml::Scalar::raw(s).flow_entries();
     let (bf, of, tf) = (fields(b)?, fields(o)?, fields(t)?);
@@ -481,21 +487,32 @@ fn both(q: &Question) -> Option<(String, String)> {
         let get = |list: &[(String, String)]| {
             list.iter()
                 .find(|(k, _)| k == key)
-                .and_then(|(_, v)| v.parse::<f32>().ok())
+                .and_then(|(_, v)| v.parse::<f64>().ok())
         };
-        let (b, o, t) = (bv.parse::<f32>().ok()?, get(&of)?, get(&tf)?);
-        out.push((key.clone(), (b + (o - b) + (t - b)).to_string()));
+        let (b, o, t) = (bv.parse::<f64>().ok()?, get(&of)?, get(&tf)?);
+        out.push((key.clone(), tidy(b + (o - b) + (t - b))));
     }
     let value = unity_yaml::Scalar::flow(&out).as_raw().to_owned();
     let shown: Vec<&str> = out.iter().map(|(_, v)| v.as_str()).collect();
     Some((format!("({})", shown.join(", ")), value))
 }
 
-fn signed(x: f32) -> String {
+fn signed(x: f64) -> String {
     if x < 0.0 {
-        format!("− {}", -x)
+        format!("− {}", tidy(-x))
     } else {
-        format!("+ {x}")
+        format!("+ {}", tidy(x))
+    }
+}
+
+/// A number without float noise: Unity's values have at most a few
+/// significant decimals, so `0.49999994` is shown and written as `0.5`.
+fn tidy(x: f64) -> String {
+    let rounded = format!("{x:.6}");
+    let trimmed = rounded.trim_end_matches('0').trim_end_matches('.');
+    match trimmed {
+        "-0" | "" => "0".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -884,6 +901,11 @@ mod tests {
             .unwrap()
             .1,
             "{x: 2, y: 1, z: 3}"
+        );
+        // Field test D1: no float noise.
+        assert_eq!(
+            both(&q("0.8", "0.55", "1.3")).unwrap(),
+            ("0.8 − 0.25 + 0.5 = 1.05".to_owned(), "1.05".to_owned())
         );
         assert!(both(&q("Player", "Hero", "Boss")).is_none());
         assert!(both(&q("{fileID: 0}", "{fileID: 1}", "{fileID: 2}")).is_none());

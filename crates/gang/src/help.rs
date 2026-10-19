@@ -17,6 +17,7 @@ GANG commands:
   bang             Answer quick questions about merge conflicts
   undo             Undo the last save, reset, restore or clean
   who [path]       Who on the team is changing what
+  note <text>      Tell the team what you are working on (--clear)
   lock <target>    Lock files or objects (file::object, --level 0|1|2, --auto, --bake)
   unlock <target>  Release locks
   locks            Show the team's locks

@@ -38,7 +38,7 @@ pub fn tree(invocation: &Invocation) -> Result<i32> {
     let text = std::fs::read_to_string(&file_part)
         .with_context(|| format!("could not read {file_part}"))?;
     let file = unity_yaml::parse(&text).map_err(|e| anyhow::anyhow!("{file_part}: {e}"))?;
-    let guids = semantic::guid_index(&repo);
+    let guids = semantic::name_index(&repo);
     let lookup = |guid: &str| guids.name(guid);
     let hierarchy = Hierarchy::build_with(&file, &lookup);
     let ctx = RenderContext::new(&file, &file, Some(&guids));
@@ -310,7 +310,7 @@ fn print_semantic(
     files: &[String],
     versions: impl Fn(&str) -> Result<(Option<String>, Option<String>)>,
 ) -> Result<()> {
-    let guids = semantic::guid_index(repo);
+    let guids = semantic::name_index(repo);
     let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
     for path in files {
         let (old, new) = versions(path)?;
@@ -399,7 +399,7 @@ pub fn log(invocation: &Invocation, repo: &Repo) -> Result<Option<i32>> {
     let mut log_args = vec!["log".to_owned(), "--format=%H".to_owned()];
     log_args.extend(args);
     let commits = repo.run(&log_args)?;
-    let guids = semantic::guid_index(repo);
+    let guids = semantic::name_index(repo);
     let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
     for commit in commits.lines() {
         let header = repo.run(["log", "-1", "--format=%h  %an, %ar  %s", commit])?;

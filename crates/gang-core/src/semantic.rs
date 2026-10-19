@@ -20,6 +20,52 @@ pub fn guid_index(repo: &Repo) -> GuidIndex {
     index
 }
 
+/// [`guid_index`] plus the packages Unity downloaded into
+/// `Library/PackageCache`, for naming things: UI and networking components
+/// live in packages, and without them a diff says "MonoBehaviour" where
+/// the Inspector says "Canvas Scaler". The package part is cached in
+/// `.git/gang/cache/` until the package folder changes.
+pub fn name_index(repo: &Repo) -> GuidIndex {
+    let mut index = guid_index(repo);
+    for project in unity::find_projects(repo.root()) {
+        let cache = project
+            .path(repo.root())
+            .join("Library")
+            .join("PackageCache");
+        let Ok(stamp) = fs::metadata(&cache).and_then(|m| m.modified()) else {
+            continue;
+        };
+        let stamp = stamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let file = repo
+            .gang_dir()
+            .join("cache")
+            .join(format!("packages-{}.json", project.dir.replace('/', "_")));
+        let cached: Option<(u64, Vec<(String, String)>)> = fs::read_to_string(&file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok());
+        let entries = match cached {
+            Some((at, entries)) if at == stamp => entries,
+            _ => {
+                let scanned = GuidIndex::scan_folder(&cache, repo.root());
+                let entries = scanned.entries();
+                if let Some(dir) = file.parent() {
+                    let _ = fs::create_dir_all(dir);
+                }
+                let _ = fs::write(
+                    &file,
+                    serde_json::to_string(&(stamp, &entries)).unwrap_or_default(),
+                );
+                entries
+            }
+        };
+        index.extend(GuidIndex::from_entries(entries));
+    }
+    index
+}
+
 /// Comparison rules from the project's configuration.
 pub fn rules(config: &Config) -> Rules {
     Rules {

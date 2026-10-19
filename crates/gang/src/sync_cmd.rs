@@ -392,7 +392,7 @@ fn summarize(repo: &Repo, before: &str, names: &str) {
     if unity.is_empty() {
         return;
     }
-    let guids = semantic::guid_index(repo);
+    let guids = semantic::name_index(repo);
     let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
     println!(
         "Merged automatically{}:",
@@ -416,8 +416,33 @@ fn summarize(repo: &Repo, before: &str, names: &str) {
         let mut ctx = gang_merge::render::Context::new(&old, &new, Some(&guids));
         ctx.layer_names = gang_core::layers::names_for(repo, &path);
         let lines = gang_merge::render::render(&changes, &ctx, false);
+        // Whose work it was (field test E8).
+        let authors: Vec<String> = repo
+            .run([
+                "log",
+                "--format=%an",
+                &format!("{before}..HEAD"),
+                "--no-merges",
+                "--",
+                &path,
+            ])
+            .map(|out| {
+                let mut seen: Vec<String> = Vec::new();
+                for name in out.lines() {
+                    if !seen.iter().any(|s| s == name) {
+                        seen.push(name.to_owned());
+                    }
+                }
+                seen
+            })
+            .unwrap_or_default();
+        let by = if authors.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", authors.join(", "))
+        };
         println!(
-            "  {}: {} change{}",
+            "  {}{by}: {} change{}",
             path.rsplit('/').next().unwrap_or(&path),
             lines.len(),
             if lines.len() == 1 { "" } else { "s" }

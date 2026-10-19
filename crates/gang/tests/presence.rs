@@ -208,3 +208,18 @@ fn commands_publish_in_the_background() {
         vec![(SCENE.to_owned(), "modified".to_owned())]
     );
 }
+
+/// Field test E7: what a teammate is working on, in their own words.
+#[test]
+fn a_note_tells_the_team_what_someone_is_on() {
+    let team = Team::new(&["alice", "bob"]);
+    let note = team.gang("alice", &["note", "Room_B2", "+", "navmesh"]);
+    assert_eq!(note.code, Some(0), "{note:?}");
+    team.publish("alice");
+    let who = team.gang("bob", &["who"]);
+    assert!(who.stdout.contains("✎ Room_B2 + navmesh"), "{who:?}");
+    assert_eq!(team.gang("alice", &["note", "--clear"]).code, Some(0));
+    team.publish("alice");
+    let who = team.gang("bob", &["who"]);
+    assert!(!who.stdout.contains("✎"), "{who:?}");
+}

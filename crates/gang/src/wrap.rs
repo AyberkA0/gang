@@ -574,6 +574,66 @@ fn mv(invocation: &Invocation, repo: &Repo) -> Result<i32> {
         if is_asset && index.contains(&meta) && !sources.contains(&meta) {
             moves.push((meta, format!("{target}.meta")));
         }
+        // A scene's lighting and NavMesh data live in a folder named after
+        // it; Unity only finds them there (field test C4).
+        if let (Some(old_stem), Some(new_stem)) =
+            (source.strip_suffix(".unity"), target.strip_suffix(".unity"))
+        {
+            let folder_meta = format!("{old_stem}.meta");
+            let tracked_inside = index.iter().any(|p| p.starts_with(&format!("{old_stem}/")));
+            if old_stem != new_stem
+                && tracked_inside
+                && !sources.iter().any(|s| s == old_stem)
+                && !repo.root().join(new_stem).exists()
+            {
+                moves.push((old_stem.to_owned(), new_stem.to_owned()));
+                if index.contains(&folder_meta) {
+                    moves.push((folder_meta, format!("{new_stem}.meta")));
+                }
+            }
+        }
+    }
+
+    // Folders that do not exist yet are created, with their .meta, as
+    // Unity would (field test C6).
+    for (from, to) in moves.clone() {
+        if from.ends_with(".meta") {
+            continue;
+        }
+        let Some(project) = projects.iter().find(|p| to.starts_with(&p.join("Assets/"))) else {
+            continue;
+        };
+        let assets = project.join("Assets");
+        let mut missing = Vec::new();
+        let mut dir = to.rsplit_once('/').map(|(d, _)| d.to_owned());
+        while let Some(current) = dir {
+            if current.len() <= assets.len() || repo.root().join(&current).is_dir() {
+                break;
+            }
+            missing.push(current.clone());
+            dir = current.rsplit_once('/').map(|(d, _)| d.to_owned());
+        }
+        for folder in missing.into_iter().rev() {
+            std::fs::create_dir_all(repo.root().join(&folder))?;
+            let meta = format!("{folder}.meta");
+            std::fs::write(
+                repo.root().join(&meta),
+                format!(
+                    "fileFormatVersion: 2
+guid: {}
+folderAsset: yes
+DefaultImporter:
+  externalObjects: {{}}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+",
+                    new_guid()
+                ),
+            )?;
+            repo.run(["add", "--", &meta])?;
+            ui::done(format!("created {folder} (with its .meta)"));
+        }
     }
 
     for (from, to) in &moves {
@@ -602,8 +662,71 @@ fn mv(invocation: &Invocation, repo: &Repo) -> Result<i32> {
                 ui::warn(format!("{place} still loads the scene by its old name"));
             }
         }
+        if from.ends_with(".unity") && from != to {
+            for settings in build_settings_with(repo, &projects, from, to)? {
+                ui::done(format!("{settings}: the scene list now points at {to}"));
+            }
+        }
     }
     Ok(0)
+}
+
+/// Points Build Settings' scene list at a moved scene; returns the files
+/// changed (staged).
+fn build_settings_with(
+    repo: &Repo,
+    projects: &[unity::UnityProject],
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>> {
+    let mut changed = Vec::new();
+    for project in projects {
+        let path = project.join("ProjectSettings/EditorBuildSettings.asset");
+        let Ok(text) = std::fs::read_to_string(repo.root().join(&path)) else {
+            continue;
+        };
+        let scene_from = from
+            .strip_prefix(&format!("{}/", project.dir))
+            .unwrap_or(from);
+        let needle = format!(
+            "path: {scene_from}
+"
+        );
+        if !text.contains(&needle) {
+            continue;
+        }
+        let scene_to = to.strip_prefix(&format!("{}/", project.dir)).unwrap_or(to);
+        let updated = text.replace(
+            &needle,
+            &format!(
+                "path: {scene_to}
+"
+            ),
+        );
+        std::fs::write(repo.root().join(&path), updated)?;
+        repo.run(["add", "--", &path])?;
+        changed.push(path);
+    }
+    Ok(changed)
+}
+
+/// A new random GUID for a `.meta` file.
+fn new_guid() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut out = String::new();
+    for round in 0..2u64 {
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u64(round);
+        hasher.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
+        hasher.write_u32(std::process::id());
+        out.push_str(&format!("{:016x}", hasher.finish()));
+    }
+    out
 }
 
 fn file_name(path: &str) -> &str {

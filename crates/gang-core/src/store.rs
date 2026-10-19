@@ -285,7 +285,7 @@ pub fn driver_merge(
         }
         _ => ours,
     };
-    let guids = crate::semantic::guid_index(repo);
+    let guids = crate::semantic::name_index(repo);
     // Fields renamed with [FormerlySerializedAs] on either side: the old
     // key is written under its new name in all three versions (§13.10).
     let renamed = if format == Format::Unity

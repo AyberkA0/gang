@@ -135,6 +135,35 @@ pub fn publish(invocation: &Invocation) -> Result<i32> {
     Ok(0)
 }
 
+/// `gang note "Room_B2 + navmesh"`: tells the team what you are working on;
+/// `gang note` shows yours, `gang note --clear` removes it.
+pub fn note(invocation: &Invocation) -> Result<i32> {
+    let repo = Repo::discover(&invocation.git_globals)?.context("not inside a git repository")?;
+    let args: Vec<String> = invocation
+        .args
+        .iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    match args.as_slice() {
+        [] => match presence::note(&repo) {
+            Some(note) => println!("{}", note.text),
+            None => {
+                println!("No note. `gang note \"what you are working on\"` shows one to the team.")
+            }
+        },
+        [flag] if flag == "--clear" => {
+            presence::set_note(&repo, None)?;
+            ui::done("Note cleared");
+        }
+        words => {
+            let text = words.join(" ");
+            presence::set_note(&repo, Some(&text))?;
+            ui::done(format!("The team sees: {text}"));
+        }
+    }
+    Ok(0)
+}
+
 /// `gang who [path]`: who is changing what.
 pub fn who(invocation: &Invocation) -> Result<i32> {
     let repo = Repo::discover(&invocation.git_globals)?.context("not inside a git repository")?;
@@ -203,6 +232,12 @@ pub fn who(invocation: &Invocation) -> Result<i32> {
             summary.push_str(" · Unity open");
         }
         println!("{dot} {name:<22} {:<8} {branch:<16} {summary}", person.os);
+        if let Some(note) = &person.note {
+            let since = clock::parse(&note.since)
+                .map(|t| format!(" ({})", clock::ago(now - t)))
+                .unwrap_or_default();
+            println!("    ✎ {}{since}", note.text);
+        }
         for (file, flag) in person.files.iter().take(8) {
             println!("    {:<9} {file}", flag.state.label());
         }

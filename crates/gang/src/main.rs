@@ -72,6 +72,7 @@ fn run(invocation: &Invocation) -> Result<i32> {
         Some("save") => save_cmd::save(invocation),
         Some("undo") => save_cmd::undo(invocation),
         Some("who") => presence_cmd::who(invocation),
+        Some("note") => presence_cmd::note(invocation),
         Some("tree") => semantic_cmd::tree(invocation),
         Some("bang") => bang::run(invocation),
         Some("sync") => sync_cmd::run(invocation),

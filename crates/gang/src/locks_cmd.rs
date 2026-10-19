@@ -555,6 +555,7 @@ fn auto(repo: &Repo, config: &Config, me: &str, args: &LockArgs) -> Result<i32> 
 
     let mut rows = Vec::new();
     let mut to_lock = Vec::new();
+    let mut objects: Vec<Target> = Vec::new();
     for (path, state) in &flags {
         if *state == State::Stashed || path.ends_with(".meta") {
             continue;
@@ -567,7 +568,35 @@ fn auto(repo: &Repo, config: &Config, me: &str, args: &LockArgs) -> Result<i32> 
                 format!("skipped — {kind} files are not auto-locked (locks.auto_allowed)")
             })
         } else if let Some(user) = others_changing.get(path.as_str()) {
-            Some(format!("skipped — {user} is also changing it"))
+            // A scene or prefab someone else is changing too: lock what *we*
+            // changed in it, object by object (field test C3).
+            let mine = if attributes::is_unity_yaml(path) {
+                changed_objects(repo, upstream.as_deref(), path)
+            } else {
+                Vec::new()
+            };
+            let free: Vec<Target> = mine
+                .into_iter()
+                .filter(|target| {
+                    !table
+                        .locks
+                        .iter()
+                        .any(|l| l.targets().any(|t| t == target || t.covers_file(path)))
+                })
+                .collect();
+            if free.is_empty() {
+                Some(format!("skipped — {user} is also changing it"))
+            } else {
+                for target in &free {
+                    rows.push((
+                        true,
+                        target.label(),
+                        format!("your change ({user} is changing other parts)"),
+                    ));
+                }
+                objects.extend(free);
+                continue;
+            }
         } else {
             table
                 .locks
@@ -595,8 +624,8 @@ fn auto(repo: &Repo, config: &Config, me: &str, args: &LockArgs) -> Result<i32> 
             println!("  {} {path:<44} {note}", if *locked { "🔒" } else { "· " });
         }
     }
-    if args.dry_run || to_lock.is_empty() {
-        if !quiet && to_lock.is_empty() {
+    if args.dry_run || (to_lock.is_empty() && objects.is_empty()) {
+        if !quiet && to_lock.is_empty() && objects.is_empty() {
             println!("Nothing new to lock.");
         }
         return Ok(0);
@@ -625,16 +654,97 @@ fn auto(repo: &Repo, config: &Config, me: &str, args: &LockArgs) -> Result<i32> 
             });
             added += 1;
         }
+        for target in &objects {
+            if table.locks.iter().any(|l| l.targets().any(|t| t == target)) {
+                continue;
+            }
+            table.locks.push(Lock {
+                id: locks::new_id(),
+                owner: me.to_owned(),
+                github_id,
+                since: clock::format(clock::now()),
+                reason: None,
+                kind: LockKind::Auto,
+                level: 0,
+                root: target.clone(),
+                derived: Vec::new(),
+            });
+            added += 1;
+        }
         Ok(added)
     })?;
     if !quiet {
         println!();
         println!(
-            "Locked {count} file{} (auto, level 0). They will be released when you push.",
-            s(count)
+            "Locked {count} {} (auto, level 0). They will be released when you push.",
+            if objects.is_empty() {
+                format!("file{}", s(count))
+            } else {
+                "item".to_owned() + s(count)
+            }
         );
     }
     Ok(0)
+}
+
+/// The objects (with their subtrees) our work changed or added in a scene
+/// or prefab, compared with the upstream: the outermost ones only.
+fn changed_objects(repo: &Repo, upstream: Option<&str>, path: &str) -> Vec<Target> {
+    let old = upstream
+        .and_then(|u| {
+            gang_core::semantic::blob(repo, &format!("{u}:{path}"))
+                .ok()
+                .flatten()
+        })
+        .and_then(|t| unity_yaml::parse(&t).ok());
+    let Some(new) =
+        gang_core::semantic::worktree(repo, path).and_then(|t| unity_yaml::parse(&t).ok())
+    else {
+        return Vec::new();
+    };
+    let old = old.unwrap_or_else(|| unity_yaml::File {
+        prefix: String::new(),
+        docs: Vec::new(),
+    });
+    let rules = gang_core::semantic::rules(&Config::load(repo.root()).unwrap_or_default());
+    let hierarchy = unity_yaml::Hierarchy::build(&new);
+    let mut owners: BTreeSet<i64> = BTreeSet::new();
+    for change in gang_merge::diff::diff(&old, &new, &rules) {
+        if change.is_noise() {
+            continue;
+        }
+        if let gang_merge::diff::DocChange::Removed(_) = change {
+            continue;
+        }
+        if let Some(owner) = hierarchy.owner(change.id()) {
+            owners.insert(owner);
+        }
+    }
+    // Keep the outermost: a changed parent's subtree covers its children.
+    let outermost: Vec<i64> = owners
+        .iter()
+        .copied()
+        .filter(|id| {
+            let mut parent = hierarchy.object(*id).and_then(|o| o.parent);
+            while let Some(p) = parent {
+                if owners.contains(&p) {
+                    return false;
+                }
+                parent = hierarchy.object(p).and_then(|o| o.parent);
+            }
+            true
+        })
+        .collect();
+    outermost
+        .into_iter()
+        .filter_map(|id| {
+            Some(Target::Object {
+                file: path.to_owned(),
+                file_id: id,
+                path: hierarchy.path(id)?,
+            })
+        })
+        .collect()
 }
 
 /// For the panel's `--watch` mode: auto-lock new changes, release pushed
@@ -681,6 +791,8 @@ pub fn release_auto(repo: &Repo) -> Result<Vec<String>> {
         .iter()
         .filter(|l| match &l.root {
             Target::File { path } => !flags.contains_key(path),
+            // An object auto lock goes with its file's last unpushed change.
+            Target::Object { file, .. } => !flags.contains_key(file),
             _ => false,
         })
         .map(|l| l.id.clone())

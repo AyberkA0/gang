@@ -498,3 +498,34 @@ fn unlocking_unpushed_binary_work_asks_first() {
         Some(0)
     );
 }
+
+/// Field test C3: `lock --auto` used to skip a scene a teammate was also
+/// changing, leaving the work it should protect unlocked. Now it locks the
+/// objects we changed in it, and the teammate keeps the rest.
+#[test]
+fn auto_locks_lock_our_objects_in_a_shared_scene() {
+    let team = Team::new(&["alice", "bob"]);
+    team.write("bob", SCENE, &scene("0", "4"));
+    assert_eq!(team.gang("bob", &["presence-publish"]).code, Some(0));
+    team.write("alice", SCENE, &scene("7", "0"));
+    team.gang("alice", &["presence-publish"]);
+    let auto = team.gang("alice", &["lock", "--auto"]);
+    assert_eq!(auto.code, Some(0), "{auto:?}");
+    assert!(
+        auto.stdout
+            .contains("🔒 Level1.unity › Environment › Player"),
+        "{}",
+        auto.stdout
+    );
+    assert!(!auto.stdout.contains("Tree"), "{}", auto.stdout);
+    // Bob's tree change still commits; a change to Player would not.
+    team.gang("bob", &["locks"]);
+    team.git("bob", &["add", "-A"]);
+    let commit = team.git("bob", &["commit", "-q", "-m", "tree"]);
+    assert_eq!(commit.code, Some(0), "{commit:?}");
+    team.write("bob", SCENE, &scene("3", "4"));
+    team.git("bob", &["add", "-A"]);
+    let commit = team.git("bob", &["commit", "-q", "-m", "player"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(commit.stderr.contains("Player"), "{commit:?}");
+}

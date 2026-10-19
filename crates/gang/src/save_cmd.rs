@@ -249,8 +249,22 @@ fn pre_commit() -> Result<i32> {
             let all = gang_core::locks::read(&repo)
                 .map(|t| t.locks)
                 .unwrap_or_default();
+            // Moving bake data along with its renamed scene changes nothing
+            // in it (field test C4): exact renames are not bake changes.
+            let renamed: std::collections::BTreeSet<String> =
+                gang_core::repo::split_nul(&repo.run([
+                    "diff",
+                    "--cached",
+                    "--name-status",
+                    "-M100%",
+                    "--diff-filter=R",
+                    "-z",
+                ])?)
+                .chunks(3)
+                .flat_map(|c| c.iter().skip(1).cloned().collect::<Vec<_>>())
+                .collect();
             let mut scenes = std::collections::BTreeSet::new();
-            for change in &changes {
+            for change in changes.iter().filter(|c| !renamed.contains(&c.path)) {
                 if let Some(scene) = gang_core::lock_check::bake_output_scene(&index, &change.path)
                 {
                     if !gang_core::lock_check::holds_bake_lock(&all, &me, &scene) {

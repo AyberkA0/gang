@@ -150,6 +150,48 @@ pub struct Presence {
     pub files: BTreeMap<String, FileFlag>,
     #[serde(default)]
     pub notices: Vec<Notice>,
+    /// What the user said they are working on (`gang note`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<Note>,
+}
+
+/// `gang note "Room_B2 + navmesh"`: a line for the team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Note {
+    pub text: String,
+    pub since: String,
+}
+
+fn note_path(repo: &Repo) -> PathBuf {
+    repo.gang_dir().join("note.json")
+}
+
+/// This user's note, if any.
+pub fn note(repo: &Repo) -> Option<Note> {
+    fs::read_to_string(note_path(repo))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+}
+
+/// Sets (or with `None` clears) this user's note; it goes out with the next
+/// publish.
+pub fn set_note(repo: &Repo, text: Option<&str>) -> Result<()> {
+    match text.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(text) => {
+            fs::create_dir_all(repo.gang_dir())?;
+            fs::write(
+                note_path(repo),
+                serde_json::to_string(&Note {
+                    text: text.chars().take(120).collect(),
+                    since: clock::format(clock::now()),
+                })?,
+            )?;
+        }
+        None => {
+            let _ = fs::remove_file(note_path(repo));
+        }
+    }
+    Ok(())
 }
 
 impl Presence {
@@ -301,8 +343,9 @@ pub fn compute_flags(repo: &Repo, upstream: Option<&str>) -> Result<BTreeMap<Str
         if let Some(diff) = repo.try_run(["diff", "--name-status", "--no-renames", "-z", &range])? {
             for pair in split_nul(&diff).chunks(2) {
                 if let [status, path] = pair {
+                    // Committed but not pushed reads the same whether the
+                    // file is new or changed (field test D5).
                     let state = match status.as_str() {
-                        "A" => State::Added,
                         "D" => State::Deleted,
                         _ => State::Unpushed,
                     };
@@ -385,6 +428,7 @@ pub fn current(repo: &Repo, config: &Config, previous: Option<&Presence>) -> Res
         ahead,
         files,
         notices: previous.map(|p| p.notices.clone()).unwrap_or_default(),
+        note: note(repo),
     })
 }
 
@@ -655,6 +699,7 @@ mod tests {
             ahead: 0,
             files: BTreeMap::new(),
             notices: Vec::new(),
+            note: None,
         };
         let mut b = a.clone();
         b.seq = 2;

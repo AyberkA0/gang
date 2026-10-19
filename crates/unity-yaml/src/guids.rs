@@ -58,6 +58,25 @@ impl GuidIndex {
         index
     }
 
+    /// Every `(guid, path)`.
+    pub fn entries(&self) -> Vec<(String, String)> {
+        let mut entries: Vec<(String, String)> = self
+            .paths
+            .iter()
+            .map(|(g, p)| (g.clone(), p.clone()))
+            .collect();
+        entries.sort();
+        entries
+    }
+
+    /// An index from `(guid, path)` pairs.
+    pub fn from_entries(entries: Vec<(String, String)>) -> GuidIndex {
+        GuidIndex {
+            paths: entries.into_iter().collect(),
+            duplicates: Vec::new(),
+        }
+    }
+
     /// Adds another project's assets.
     pub fn extend(&mut self, other: GuidIndex) {
         self.duplicates.extend(other.duplicates);

@@ -476,6 +476,9 @@ fn person_line(person: &Presence, you: bool, online: bool, now: i64) -> Line<'st
     if person.editor_open {
         summary.push_str(" · Unity open");
     }
+    if let Some(note) = &person.note {
+        summary.push_str(&format!(" · ✎ {}", note.text));
+    }
     Line::from(vec![
         Span::styled(format!(" {dot} "), Style::default().fg(color)),
         Span::styled(
@@ -525,6 +528,7 @@ mod tests {
                 })
                 .collect(),
             notices: Vec::new(),
+            note: None,
         }
     }
 

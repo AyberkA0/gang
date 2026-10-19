@@ -315,3 +315,80 @@ fn unity_open_blocks_switching_branches() {
         Some(0)
     );
 }
+
+/// Field test C4 and C6: renaming a scene into a folder that does not exist
+/// yet. GANG creates the folder with its .meta, moves the scene's bake
+/// folder with it, points Build Settings at the new path, and the commit
+/// needs no bake lock: nothing in the bake data changed.
+#[test]
+fn renaming_a_scene_takes_its_folder_and_build_settings_along() {
+    let sandbox = Sandbox::empty();
+    sandbox.unity_project("");
+    let files = [
+        ("Assets/Scenes/E1M1.unity", "%YAML 1.1\n"),
+        (
+            "Assets/Scenes/E1M1.unity.meta",
+            "fileFormatVersion: 2\nguid: 44444444444444444444444444444444\n",
+        ),
+        (
+            "Assets/Scenes/E1M1.meta",
+            "fileFormatVersion: 2\nguid: 22222222222222222222222222222222\nfolderAsset: yes\n",
+        ),
+        ("Assets/Scenes/E1M1/LightingData.asset", "baked"),
+        (
+            "Assets/Scenes/E1M1/LightingData.asset.meta",
+            "fileFormatVersion: 2\nguid: 33333333333333333333333333333333\n",
+        ),
+        (
+            "ProjectSettings/EditorBuildSettings.asset",
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1045 &1\nEditorBuildSettings:\n  m_Scenes:\n  - enabled: 1\n    path: Assets/Scenes/E1M1.unity\n    guid: 44444444444444444444444444444444\n",
+        ),
+    ];
+    for (path, text) in files {
+        sandbox.write(path, text);
+    }
+    assert_eq!(sandbox.run(GANG, &["init"]).code, Some(0));
+    sandbox.git(&["add", "-A"]);
+    // The starting point, bake data included (the default lighting policy
+    // asks for a bake lock to commit bake outputs).
+    sandbox.git(&["commit", "-q", "--no-verify", "-m", "start"]);
+
+    let mv = sandbox.run(
+        GANG,
+        &[
+            "mv",
+            "Assets/Scenes/E1M1.unity",
+            "Assets/Levels/Level01.unity",
+        ],
+    );
+    assert_eq!(mv.code, Some(0), "{mv:?}");
+    assert!(
+        mv.stdout.contains("created Assets/Levels (with its .meta)"),
+        "{mv:?}"
+    );
+    let files = tracked_after_add(&sandbox);
+    for expected in [
+        "Assets/Levels.meta",
+        "Assets/Levels/Level01.unity",
+        "Assets/Levels/Level01.unity.meta",
+        "Assets/Levels/Level01.meta",
+        "Assets/Levels/Level01/LightingData.asset",
+        "Assets/Levels/Level01/LightingData.asset.meta",
+    ] {
+        assert!(files.contains(expected), "{expected}\n{files}");
+    }
+    assert!(!files.contains("Assets/Scenes/E1M1"), "{files}");
+    let meta = sandbox.read("Assets/Levels.meta");
+    assert!(meta.contains("folderAsset: yes"), "{meta}");
+    assert!(
+        sandbox
+            .read("ProjectSettings/EditorBuildSettings.asset")
+            .contains("path: Assets/Levels/Level01.unity\n")
+    );
+    let commit = sandbox.run(GANG, &["commit", "-q", "-m", "rename the level"]);
+    assert_eq!(commit.code, Some(0), "{commit:?}");
+}
+
+fn tracked_after_add(sandbox: &Sandbox) -> String {
+    sandbox.run("git", &["ls-files"]).stdout
+}

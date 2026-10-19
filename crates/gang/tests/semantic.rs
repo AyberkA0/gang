@@ -164,3 +164,22 @@ fn noise_is_dropped_and_not_published() {
     );
     assert_eq!(sandbox.read(SCENE_PATH), SCENE);
 }
+
+/// Field test D4: components from packages (UI, networking) are named like
+/// the Inspector names them, not "MonoBehaviour".
+#[test]
+fn package_components_get_their_names() {
+    let sandbox = project();
+    sandbox.write(
+        "Library/PackageCache/com.unity.ugui@2.0.0/Runtime/UI/Core/Layout/CanvasScaler.cs.meta",
+        "fileFormatVersion: 2\nguid: 0cd44c1031e13a943bb63640046fad76\n",
+    );
+    let with_scaler = SCENE.replace(
+        "  jumpHeight: 2.5\n",
+        "  jumpHeight: 2.5\n--- !u!114 &203\nMonoBehaviour:\n  m_GameObject: {fileID: 200}\n  m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}\n  m_UiScaleMode: 1\n",
+    )
+    .replace("  - component: {fileID: 202}\n", "  - component: {fileID: 202}\n  - component: {fileID: 203}\n");
+    sandbox.write(SCENE_PATH, &with_scaler);
+    let tree = sandbox.run(GANG, &["tree", SCENE_PATH]);
+    assert!(tree.stdout.contains("CanvasScaler"), "{}", tree.stdout);
+}
