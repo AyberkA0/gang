@@ -339,6 +339,31 @@ fn bake_targets(expander: &mut Expander<'_>, scene: &str) -> (Target, Vec<Derive
                     },
                     why: None,
                 });
+            } else if class == 114 && doc.body().is_some_and(|b| b.get("m_NavMeshData").is_some()) {
+                // A NavMeshSurface: baking writes its navMeshData (field
+                // test C5), and the data asset may live elsewhere.
+                let data = doc
+                    .body()
+                    .and_then(|b| b.get("m_NavMeshData"))
+                    .and_then(unity_yaml::Value::as_ref)
+                    .and_then(|r| r.guid)
+                    .and_then(|g| expander.guids().path(&g).map(str::to_owned));
+                if let Some(path) = data {
+                    if !path.starts_with(&bake_folder(scene)) {
+                        derived.push(Derived {
+                            target: Target::File { path },
+                            why: None,
+                        });
+                    }
+                }
+                derived.push(Derived {
+                    target: Target::Document {
+                        file: scene.to_owned(),
+                        file_id: id,
+                        class: "NavMeshSurface".to_owned(),
+                    },
+                    why: None,
+                });
             }
         }
     }

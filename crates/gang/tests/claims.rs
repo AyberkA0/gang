@@ -323,3 +323,57 @@ public class Door : MonoBehaviour\n\
     assert!(scene.contains("  target: 9\n"), "{scene}");
     assert!(scene.contains("  count: 8\n"), "{scene}");
 }
+
+/// A layer already pushed is not reserved, it is a fact: the save warns at
+/// once that the sync will move ours, and the sync's remap does.
+#[test]
+fn a_pushed_layer_is_announced_before_the_sync_moves_ours() {
+    let team = Team::new();
+    team.write("alice", TAGS, &tag_manager(&[(8, "Projectile")]));
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "projectile"]).code,
+        Some(0)
+    );
+    team.write("bob", TAGS, &tag_manager(&[(8, "Interactable")]));
+    let save = team.gang("bob", &["save", "-m", "interactable"]);
+    assert_eq!(save.code, Some(0), "{save:?}");
+    assert!(
+        save.stderr.contains(
+            "Layer 8 is \"Projectile\" on origin/main already; your \"Interactable\" moves to a free layer when you sync"
+        ),
+        "{save:?}"
+    );
+    let sync = team.gang("bob", &["sync"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stdout.contains("Moving \"Interactable\" to layer 9"),
+        "{sync:?}"
+    );
+}
+
+/// Thought experiment TE65: switching back to main must not free a number
+/// a feature branch of ours still uses.
+#[test]
+fn a_reservation_survives_a_branch_switch() {
+    let team = Team::new();
+    team.gang("alice", &["switch", "-q", "-c", "glow"]);
+    team.write("alice", TAGS, &tag_manager(&[(8, "Glow")]));
+    assert_eq!(
+        team.gang("alice", &["save", "-m", "glow layer"]).code,
+        Some(0)
+    );
+    assert_eq!(team.gang("alice", &["switch", "-q", "main"]).code, Some(0));
+    assert_eq!(team.gang("alice", &["layers"]).code, Some(0));
+    let json = team.gang("alice", &["--json", "layers"]);
+    assert!(json.stdout.contains("\"name\": \"Glow\""), "{json:?}");
+
+    // Bob's layer 8 still has to move.
+    team.write("bob", TAGS, &tag_manager(&[(8, "Water2")]));
+    let save = team.gang("bob", &["save", "-m", "water"]);
+    assert_eq!(save.code, Some(0), "{save:?}");
+    assert!(
+        save.stdout
+            .contains("Moved your layer \"Water2\" from 8 to 9"),
+        "{save:?}"
+    );
+}

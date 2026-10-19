@@ -495,6 +495,32 @@ pub fn local(repo: &Repo, config: &Config) -> Result<Vec<Check>> {
     Ok(check(repo, &upstream, &entries, &read(repo)?, &me, &team))
 }
 
+/// `(table, project, index, name)` of every name in the tables on our
+/// local branches.
+fn on_local_branches(repo: &Repo) -> BTreeSet<(Table, String, u32, String)> {
+    let mut names = BTreeSet::new();
+    let Ok(branches) = repo.run(["for-each-ref", "--format=%(refname)", "refs/heads/"]) else {
+        return names;
+    };
+    let projects = unity::find_projects(repo.root());
+    for branch in branches.lines().take(50) {
+        for project in &projects {
+            for table in TABLES {
+                for (i, name) in names_at(repo, project, table, branch)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                {
+                    if !name.is_empty() {
+                        names.insert((table, project.dir.clone(), i as u32, name));
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
 /// What [`sync`] did.
 #[derive(Debug, Default)]
 pub struct Synced {
@@ -542,6 +568,9 @@ pub fn sync(repo: &Repo, config: &Config) -> Result<Synced> {
     let team = presence::team(repo).unwrap_or_default();
     let now = clock::now();
     let mut reserved = Vec::new();
+    // Names our other local branches still have keep their reservations:
+    // switching to main must not free a number the feature branch uses.
+    let kept = on_local_branches(repo);
     update(repo, |table| {
         reserved.clear();
         let before = table.clone();
@@ -556,6 +585,7 @@ pub fn sync(repo: &Repo, config: &Config) -> Result<Synced> {
                 || entries
                     .iter()
                     .any(|e| same_place(c, e.table, &e.project, e.index))
+                || kept.contains(&(c.table, c.project.clone(), c.index, c.name.clone()))
         });
         for check in &checks {
             let e = &check.entry;
@@ -589,6 +619,47 @@ pub fn sync(repo: &Repo, config: &Config) -> Result<Synced> {
         checks: check(repo, &upstream, &entries, &read(repo)?, &me, &team),
         reserved,
     })
+}
+
+/// Names this clone added at positions the default branch has meanwhile
+/// given another name: the merge-time remap will move them at the next
+/// sync. One line each, for an early warning (no network).
+pub fn taken_upstream(repo: &Repo, config: &Config) -> Vec<String> {
+    if disabled() {
+        return Vec::new();
+    }
+    let Ok(Some(upstream)) = default_branch(repo, config) else {
+        return Vec::new();
+    };
+    let Some(base) = repo
+        .try_run(["merge-base", "HEAD", &upstream])
+        .ok()
+        .flatten()
+        .map(|b| b.trim().to_owned())
+    else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    for project in unity::find_projects(repo.root()) {
+        let table = Table::Layers;
+        let (Some(mine), Some(theirs)) = (
+            names_at(repo, &project, table, ""),
+            names_at(repo, &project, table, &upstream),
+        ) else {
+            continue;
+        };
+        let base_names = names_at(repo, &project, table, &base).unwrap_or_default();
+        for i in table.first_user()..table.size() {
+            let get = |list: &[String]| list.get(i).cloned().unwrap_or_default();
+            let (m, t, b) = (get(&mine), get(&theirs), get(&base_names));
+            if !m.is_empty() && !t.is_empty() && m != t && b.is_empty() {
+                lines.push(format!(
+                    "Layer {i} is {t:?} on {upstream} already; your {m:?} moves to a free layer when you sync. Until then, avoid writing its number in code."
+                ));
+            }
+        }
+    }
+    lines
 }
 
 /// Gives up this user's reservations of `name` (all tables, all projects).

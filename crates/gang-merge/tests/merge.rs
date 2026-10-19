@@ -607,3 +607,30 @@ fn define_symbols_merge_as_a_set() {
     assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
     assert_eq!(text, settings("B;NETCODE;DEBUG_AI"));
 }
+
+/// Thought experiment TE74: one side inserts at the front of a list, the
+/// other edits a later element. Nothing may shift onto the wrong element.
+#[test]
+fn an_insert_and_an_edit_in_one_list_do_not_shift() {
+    let asset = |items: &[&str]| {
+        let mut text = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!114 &1\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: abc, type: 3}\n  waves:\n".to_owned();
+        for item in items {
+            text.push_str(&format!("  - {item}\n"));
+        }
+        text
+    };
+    let (text, merged) = auto(
+        &asset(&["10", "20", "30"]),
+        &asset(&["5", "10", "20", "30"]),
+        &asset(&["10", "20", "35"]),
+    );
+    assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+    assert_eq!(text, asset(&["5", "10", "20", "35"]));
+    // The same stretch changed on both sides still asks.
+    let (_, merged) = auto(
+        &asset(&["10", "20", "30"]),
+        &asset(&["10", "25", "30"]),
+        &asset(&["10", "26", "30"]),
+    );
+    assert_eq!(merged.conflicts.len(), 1, "{:?}", merged.conflicts);
+}

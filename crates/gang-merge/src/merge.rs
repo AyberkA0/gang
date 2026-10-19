@@ -713,6 +713,12 @@ impl Merger<'_> {
         if had_base && only_additions(b, o) && only_additions(b, t) {
             return Some(self.merge_identity_from(o, t, b));
         }
+        // Changes in different places of the list (an insert at the front,
+        // an edit at the end): diff3 on the items, as git does for lines.
+        // Changes that touch the same place still ask.
+        if had_base {
+            return diff3(b, o, t);
+        }
         None
     }
 
@@ -1114,6 +1120,81 @@ fn item_key(item: &Item) -> Option<String> {
 
 /// Whether `side` is `base` with items added: every base item is still
 /// there, unchanged and in the same order, and no item appears twice.
+/// Longest common subsequence of two keyed lists: `(a index, b index)`
+/// pairs in order.
+fn lcs(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
+    let (n, m) = (a.len(), b.len());
+    let mut table = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            table[i][j] = if a[i] == b[j] {
+                table[i + 1][j + 1] + 1
+            } else {
+                table[i + 1][j].max(table[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    let mut pairs = Vec::new();
+    while i < n && j < m {
+        if a[i] == b[j] {
+            pairs.push((i, j));
+            i += 1;
+            j += 1;
+        } else if table[i + 1][j] >= table[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    pairs
+}
+
+/// Three-way merge of two lists of items against their base (diff3).
+/// `None` when both sides changed the same stretch differently.
+fn diff3(base: &[Item], ours: &[Item], theirs: &[Item]) -> Option<Vec<Item>> {
+    // Very long lists: a question rather than a large table.
+    if base.len().max(ours.len()).max(theirs.len()) > 2000 {
+        return None;
+    }
+    let keys =
+        |items: &[Item]| -> Vec<String> { items.iter().map(|i| text_of(i.value())).collect() };
+    let (base_keys, our_keys, their_keys) = (keys(base), keys(ours), keys(theirs));
+    let in_ours: HashMap<usize, usize> = lcs(&base_keys, &our_keys).into_iter().collect();
+    let in_theirs: HashMap<usize, usize> = lcs(&base_keys, &their_keys).into_iter().collect();
+    let mut out = Vec::new();
+    let (mut bi, mut oi, mut ti) = (0usize, 0usize, 0usize);
+    loop {
+        // The next base item both sides kept in place.
+        let stable = (bi..base.len()).find(|l| {
+            in_ours.get(l).is_some_and(|&o| o >= oi) && in_theirs.get(l).is_some_and(|&t| t >= ti)
+        });
+        let (b_end, o_end, t_end) = match stable {
+            Some(l) => (l, in_ours[&l], in_theirs[&l]),
+            None => (base.len(), ours.len(), theirs.len()),
+        };
+        let base_part = &base_keys[bi..b_end];
+        let our_part = &our_keys[oi..o_end];
+        let their_part = &their_keys[ti..t_end];
+        if our_part == base_part {
+            out.extend_from_slice(&theirs[ti..t_end]);
+        } else if their_part == base_part || our_part == their_part {
+            out.extend_from_slice(&ours[oi..o_end]);
+        } else {
+            return None;
+        }
+        match stable {
+            Some(_) => {
+                out.push(ours[o_end].clone());
+                bi = b_end + 1;
+                oi = o_end + 1;
+                ti = t_end + 1;
+            }
+            None => return Some(out),
+        }
+    }
+}
+
 fn only_additions(base: &[Item], side: &[Item]) -> bool {
     let keys: Vec<String> = side.iter().map(|i| text_of(i.value())).collect();
     let unique: HashSet<&String> = keys.iter().collect();

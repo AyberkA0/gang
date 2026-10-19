@@ -529,3 +529,36 @@ fn auto_locks_lock_our_objects_in_a_shared_scene() {
     assert_eq!(commit.code, Some(1), "{commit:?}");
     assert!(commit.stderr.contains("Player"), "{commit:?}");
 }
+
+/// Field test C5: a NavMesh bake writes NavMeshSurface.navMeshData in the
+/// scene; the bake lock covers that component too.
+#[test]
+fn the_bake_lock_covers_the_navmesh_surface() {
+    let team = Team::new(&["alice", "bob"]);
+    let surface = |data: &str| {
+        format!(
+            "{}--- !u!114 &500\nMonoBehaviour:\n  m_GameObject: {{fileID: 100}}\n  m_Script: {{fileID: 11500000, guid: 7a5ac11cc8ef6a14ba2cf2b8e9fb1e22, type: 3}}\n  m_NavMeshData: {data}\n",
+            scene("0", "0")
+        )
+    };
+    team.write("alice", SCENE, &surface("{fileID: 0}"));
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "navmesh surface"]).code,
+        Some(0)
+    );
+    assert_eq!(team.gang("bob", &["sync"]).code, Some(0));
+    let lock = team.gang("alice", &["lock", SCENE, "--bake", "-m", "navmesh"]);
+    assert_eq!(lock.code, Some(0), "{lock:?}");
+    assert!(lock.stdout.contains("NavMeshSurface"), "{lock:?}");
+
+    team.gang("bob", &["locks"]);
+    team.write(
+        "bob",
+        SCENE,
+        &surface("{fileID: 23800000, guid: 0000000000000000000000000000beef, type: 2}"),
+    );
+    team.git("bob", &["add", "-A"]);
+    let commit = team.git("bob", &["commit", "-q", "-m", "bake"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(commit.stderr.contains("NavMeshSurface"), "{commit:?}");
+}

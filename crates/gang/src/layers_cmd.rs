@@ -104,6 +104,9 @@ pub fn before_save(repo: &Repo) -> Result<Option<i32>> {
     }
     let config = Config::load(repo.root()).unwrap_or_default();
     let checks = sync_or_local(repo, &config)?;
+    for line in claims::taken_upstream(repo, &config) {
+        ui::warn(line);
+    }
     let clashes: Vec<&Check> = checks.iter().filter(|c| c.is_clash()).collect();
     if clashes.is_empty() {
         return Ok(None);
@@ -248,7 +251,10 @@ pub fn status_notes(repo: &Repo) -> Vec<String> {
     let Ok(checks) = claims::local(repo, &config) else {
         return Vec::new();
     };
-    let mut notes = Vec::new();
+    let mut notes: Vec<String> = claims::taken_upstream(repo, &config)
+        .into_iter()
+        .map(|l| format!("⚠ {l}"))
+        .collect();
     for check in &checks {
         match &check.status {
             Status::Clash { .. } => {
