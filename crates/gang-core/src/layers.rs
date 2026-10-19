@@ -2,12 +2,13 @@
 //! layer number different names, ours moves to a free layer, together with
 //! everything our own commits used it for, in a commit of its own.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use unity_yaml::{File, Item, Map, Scalar, Value};
 
+use crate::csharp;
 use crate::repo::{Repo, split_nul};
 use crate::unity::{self, UnityProject};
 use crate::{attributes, semantic};
@@ -260,7 +261,21 @@ fn apply_in(
         .collect(),
     };
     changed.extend(untracked.iter().cloned());
-    for path in changed {
+    // The compiler's view of the scripts: which numbers really reach a
+    // layer, and which serialized fields hold one (None without Unity).
+    let needs_code = changed
+        .iter()
+        .any(|p| p.ends_with(".cs") || attributes::is_unity_yaml(p));
+    let analysis = if needs_code {
+        csharp::analyze(repo, project)
+    } else {
+        None
+    };
+    let field_roles = analysis.as_ref().map(csharp::Analysis::field_roles);
+    let scripts = analysis.as_ref().map(|_| semantic::guid_index(repo));
+    let pairs: Vec<(u32, u32)> = moves.iter().map(|m| (m.from, m.to)).collect();
+    for path in &changed {
+        let path = path.clone();
         if path == tags_path {
             continue;
         }
@@ -281,8 +296,27 @@ fn apply_in(
             let base_file = semantic::blob(repo, &format!("{base}:{path}"))?
                 .and_then(|t| unity_yaml::parse(&t).ok());
             let mut counts = Counts::default();
+            let fields = |guid: &str| -> Option<BTreeMap<String, csharp::Role>> {
+                let roles = field_roles.as_ref()?;
+                let script = scripts.as_ref()?.path(guid)?;
+                let class = script.rsplit('/').next()?.strip_suffix(".cs")?;
+                Some(
+                    roles
+                        .iter()
+                        .filter(|((c, _), _)| c == class)
+                        .map(|((_, f), r)| (f.clone(), *r))
+                        .collect(),
+                )
+            };
             for m in moves {
-                remap_file(&mut file, base_file.as_ref(), m.from, m.to, &mut counts);
+                remap_file(
+                    &mut file,
+                    base_file.as_ref(),
+                    m.from,
+                    m.to,
+                    &fields,
+                    &mut counts,
+                );
             }
             if counts.unclear_masks > 0 {
                 report.review.push(format!(
@@ -314,20 +348,74 @@ fn apply_in(
                 added_lines(repo, base, head, &path)?
             };
             let mut text = source.clone();
-            for m in moves {
-                let result = gang_csharp::rewrite_layer_number(&text, &added, m.from, m.to);
+            if let Some(analysis) = &analysis {
+                // What the compiler traced is rewritten; the text rules only
+                // add a second opinion for review (code the compiler did not
+                // see, such as inactive #if branches).
+                let uses: Vec<&csharp::Use> = analysis.uses_in(&path).collect();
+                let result = csharp::rewrite(&text, &uses, &added, &pairs);
                 for line in &result.changed {
                     report.updated.push(format!("{path}:{line}"));
                 }
-                for review in &result.review {
-                    report
-                        .review
-                        .push(format!("{path}:{}: {}", review.line, review.message));
+                for (line, why) in &result.review {
+                    report.review.push(format!("{path}:{line}: {why}"));
                 }
                 text = result.text;
+                let traced: BTreeSet<usize> = uses.iter().map(|u| u.line).collect();
+                // The text rules still cover what the compiler did not trace:
+                // declarations nothing uses yet (`enum Layers { UI3D = 8 }`),
+                // code in inactive #if branches, and anything a compile with
+                // missing references lost. The compiler only ever adds.
+                for m in moves {
+                    let second = gang_csharp::rewrite_layer_number(&text, &added, m.from, m.to);
+                    for line in second.changed.iter().filter(|l| !traced.contains(l)) {
+                        report.updated.push(format!("{path}:{line}"));
+                        report.review.push(format!(
+                            "{path}:{line}: changed because it reads like layer {}; no compiled code uses it as a layer yet",
+                            m.from
+                        ));
+                    }
+                    for review in second.review.iter().filter(|r| !traced.contains(&r.line)) {
+                        report
+                            .review
+                            .push(format!("{path}:{}: {}", review.line, review.message));
+                    }
+                    text = second.text;
+                }
+            } else {
+                for m in moves {
+                    let result = gang_csharp::rewrite_layer_number(&text, &added, m.from, m.to);
+                    for line in &result.changed {
+                        report.updated.push(format!("{path}:{line}"));
+                    }
+                    for review in &result.review {
+                        report
+                            .review
+                            .push(format!("{path}:{}: {}", review.line, review.message));
+                    }
+                    text = result.text;
+                }
             }
             if text != source {
                 std::fs::write(repo.root().join(&path), text)?;
+            }
+        }
+    }
+    // Scripts our work did not touch that give a moved number to Unity.
+    if let Some(analysis) = &analysis {
+        let mut others: BTreeMap<&str, Vec<&csharp::Use>> = BTreeMap::new();
+        for u in &analysis.uses {
+            if !changed.iter().any(|c| c == &u.file) {
+                others.entry(u.file.as_str()).or_default().push(u);
+            }
+        }
+        for (file, uses) in others {
+            let Some(text) = semantic::worktree(repo, file) else {
+                continue;
+            };
+            let result = csharp::rewrite(&text, &uses, &BTreeSet::new(), &pairs);
+            for (line, why) in result.review {
+                report.review.push(format!("{file}:{line}: {why}"));
             }
         }
     }
@@ -368,6 +456,8 @@ fn added_lines(repo: &Repo, base: &str, head: Option<&str>, path: &str) -> Resul
 
 #[derive(Default)]
 struct Counts {
+    /// Script fields the compiler knows hold a layer or a mask.
+    fields: usize,
     objects: usize,
     masks: usize,
     overrides: usize,
@@ -378,7 +468,7 @@ struct Counts {
 
 impl Counts {
     fn any(&self) -> bool {
-        self.objects + self.masks + self.overrides + self.heuristic.len() > 0
+        self.fields + self.objects + self.masks + self.overrides + self.heuristic.len() > 0
     }
 
     fn describe(&self) -> String {
@@ -404,6 +494,13 @@ impl Counts {
                 if self.overrides == 1 { "" } else { "s" }
             ));
         }
+        if self.fields > 0 {
+            parts.push(format!(
+                "{} layer field{} in scripts",
+                self.fields,
+                if self.fields == 1 { "" } else { "s" }
+            ));
+        }
         if !self.heuristic.is_empty() {
             parts.push(format!(
                 "{} script field{}",
@@ -415,7 +512,16 @@ impl Counts {
     }
 }
 
-fn remap_file(file: &mut File, base: Option<&File>, from: u32, to: u32, counts: &mut Counts) {
+/// `fields` gives, for a script's GUID, its serialized fields that hold a
+/// layer or a mask (from the compiler); `None` falls back to the field's name.
+fn remap_file(
+    file: &mut File,
+    base: Option<&File>,
+    from: u32,
+    to: u32,
+    fields: &dyn Fn(&str) -> Option<BTreeMap<String, csharp::Role>>,
+    counts: &mut Counts,
+) {
     for doc in &mut file.docs {
         let (Some(id), Some(class)) = (doc.file_id, doc.class_id) else {
             continue;
@@ -423,11 +529,17 @@ fn remap_file(file: &mut File, base: Option<&File>, from: u32, to: u32, counts: 
         let type_name = doc.type_name().unwrap_or("").to_owned();
         let base_body = base.and_then(|b| b.doc(id)).and_then(|d| d.body()).cloned();
         let Some(body) = doc.body_mut() else { continue };
+        let script_fields = body
+            .get("m_Script")
+            .and_then(Value::as_ref)
+            .and_then(|r| r.guid)
+            .and_then(|guid| fields(&guid));
         remap_map(
             body,
             base_body.as_ref(),
             class,
             &type_name,
+            script_fields.as_ref(),
             from,
             to,
             counts,
@@ -435,11 +547,13 @@ fn remap_file(file: &mut File, base: Option<&File>, from: u32, to: u32, counts: 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn remap_map(
     map: &mut Map,
     base: Option<&Map>,
     class: u32,
     type_name: &str,
+    script_fields: Option<&BTreeMap<String, csharp::Role>>,
     from: u32,
     to: u32,
     counts: &mut Counts,
@@ -465,18 +579,46 @@ fn remap_map(
                     } else if covers_both(&value, from, to) {
                         counts.unclear_masks += 1;
                     }
-                } else if type_name == "MonoBehaviour"
-                    && key.to_ascii_lowercase().contains("layer")
-                    && value == from.to_string()
-                {
-                    map.set(&key, Value::Scalar(Scalar::raw(to.to_string())));
-                    counts.heuristic.push(key.clone());
+                } else if type_name == "MonoBehaviour" {
+                    match script_fields.map(|f| f.get(&key)) {
+                        // The compiler says what the field holds.
+                        Some(Some(csharp::Role::Index)) if value == from.to_string() => {
+                            map.set(&key, Value::Scalar(Scalar::raw(to.to_string())));
+                            counts.fields += 1;
+                        }
+                        Some(Some(csharp::Role::Mask)) => {
+                            if let Some(bits) = move_bit(&value, from, to) {
+                                map.set(&key, Value::Scalar(Scalar::raw(bits)));
+                                counts.fields += 1;
+                            } else if covers_both(&value, from, to) {
+                                counts.unclear_masks += 1;
+                            }
+                        }
+                        Some(_) => {}
+                        // Without the compiler: a field named like a layer.
+                        None if key.to_ascii_lowercase().contains("layer")
+                            && value == from.to_string() =>
+                        {
+                            map.set(&key, Value::Scalar(Scalar::raw(to.to_string())));
+                            counts.heuristic.push(key.clone());
+                        }
+                        None => {}
+                    }
                 }
             }
             Some(Value::Map(_)) => {
                 let base_map = base_value.as_ref().and_then(Value::as_map).cloned();
                 if let Some(child) = map.get_mut(&key).and_then(Value::as_map_mut) {
-                    remap_map(child, base_map.as_ref(), class, type_name, from, to, counts);
+                    remap_map(
+                        child,
+                        base_map.as_ref(),
+                        class,
+                        type_name,
+                        None,
+                        from,
+                        to,
+                        counts,
+                    );
                 }
             }
             Some(Value::Seq(_)) if key == "m_Modifications" => {

@@ -248,6 +248,37 @@ pub fn installed_editors() -> Vec<String> {
     versions
 }
 
+/// The data folders of installed editors (where Unity keeps its .NET
+/// runtime, its C# compiler and its assemblies), the `preferred` version
+/// first, then the newest. `GANG_UNITY_DATA` overrides the search.
+pub fn editor_data_dirs(preferred: Option<&str>) -> Vec<PathBuf> {
+    if let Some(dir) = std::env::var_os("GANG_UNITY_DATA") {
+        return vec![PathBuf::from(dir)];
+    }
+    let mut versions = installed_editors();
+    versions.reverse();
+    if let Some(preferred) = preferred {
+        if let Some(i) = versions.iter().position(|v| v == preferred) {
+            let v = versions.remove(i);
+            versions.insert(0, v);
+        }
+    }
+    let mut dirs = Vec::new();
+    for version in versions {
+        for hub in hub_editor_dirs() {
+            let data = if cfg!(target_os = "macos") {
+                hub.join(&version).join("Unity.app").join("Contents")
+            } else {
+                hub.join(&version).join("Editor").join("Data")
+            };
+            if data.is_dir() {
+                dirs.push(data);
+            }
+        }
+    }
+    dirs
+}
+
 fn hub_editor_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if cfg!(target_os = "macos") {

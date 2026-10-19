@@ -119,6 +119,8 @@ impl Sandbox {
             .env_remove("GIT_INDEX_FILE")
             .env_remove("GANG_DEBUG")
             .env("GANG_NO_PRESENCE", "1")
+            // One compiled C# analyzer for every test, not one per clone.
+            .env("GANG_CACHE", std::env::temp_dir().join("gang-test-cache"))
             .env(
                 "GANG_CREDENTIALS_FILE",
                 self.home.join("gang-credentials.json"),

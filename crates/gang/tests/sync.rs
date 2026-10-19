@@ -403,18 +403,11 @@ class Menu : MonoBehaviour
         "const int Interact = 9;",
         "LayerMask hits = 512;",
         "100f, 0x200);",
-        "int l = 8;",
         "NameToLayer(\"UI3D\"); // layer 8",
     ] {
         assert!(script.contains(expected), "{expected}\n{script}");
     }
-    assert!(
-        sync.stdout.contains(
-            "Assets/Scripts/Menu.cs:15: 8 is stored in l, which is used as a layer but is not a constant; left as is — please review"
-        ),
-        "{sync:?}"
-    );
-    // The remap commit lists both.
+    // The remap commit lists what changed.
     let log = team
         .sandbox
         .run_in("bob", "git", &["log", "--format=%B"])
@@ -424,9 +417,32 @@ class Menu : MonoBehaviour
         "- Assets/Scripts/Menu.cs:9\n",
         "- Assets/Scripts/Menu.cs:10\n",
         "- Assets/Scripts/Menu.cs:14\n",
-        "- Assets/Scripts/Menu.cs:15: 8 is stored in l",
     ] {
         assert!(log.contains(line), "{line}\n{log}");
+    }
+    if gang_core::unity::editor_data_dirs(None).is_empty() {
+        // The text rules alone cannot tell what `l` is for: listed.
+        assert!(script.contains("int l = 8;"), "{script}");
+        assert!(
+            sync.stdout.contains(
+                "Assets/Scripts/Menu.cs:15: 8 is stored in l, which is used as a layer but is not a constant; left as is — please review"
+            ),
+            "{sync:?}"
+        );
+        assert!(
+            log.contains("- Assets/Scripts/Menu.cs:15: 8 is stored in l"),
+            "{log}"
+        );
+    } else {
+        // The compiler follows `l` into GameObject.layer and moves it.
+        assert!(script.contains("int l = 9;"), "{script}");
+        assert!(log.contains("- Assets/Scripts/Menu.cs:15\n"), "{log}");
+        // The enum nothing uses yet moved by its wording, and says so.
+        assert!(
+            sync.stdout
+                .contains("Menu.cs:5: changed because it reads like layer 8"),
+            "{sync:?}"
+        );
     }
 }
 

@@ -252,3 +252,74 @@ fn a_released_layer_frees_its_number() {
     assert!(!save.stdout.contains("Moved"), "{save:?}");
     assert!(team.read("bob", TAGS).contains("  - Interactable\n"));
 }
+
+/// With a Unity editor on the machine, the compiler finds the layer numbers
+/// that no wording gives away: a constant without "layer" in its name passed
+/// through the project's own method, a bare mask, and a serialized field
+/// whose value lives in a scene. A number that never reaches Unity as a
+/// layer stays as it is.
+#[test]
+fn the_compiler_finds_layer_numbers_the_wording_hides() {
+    if gang_core::unity::editor_data_dirs(None).is_empty() {
+        eprintln!("skipped: no Unity editor installed");
+        return;
+    }
+    let team = Team::new();
+    team.write("alice", TAGS, &tag_manager(&[(8, "Projectile")]));
+    assert_eq!(team.gang("alice", &["layers"]).code, Some(0));
+
+    team.write("bob", TAGS, &tag_manager(&[(8, "Door")]));
+    let door = "using UnityEngine;\n\
+\n\
+public class Door : MonoBehaviour\n\
+{\n\
+    const int Interact = 8;\n\
+    [SerializeField] int target = 8;\n\
+    [SerializeField] int count = 8;\n\
+\n\
+    static void Put(GameObject go, int slot) { go.layer = slot; }\n\
+\n\
+    void Start()\n\
+    {\n\
+        Put(gameObject, Interact);\n\
+        Physics.Raycast(transform.position, Vector3.forward, 10f, 256);\n\
+        gameObject.layer = target;\n\
+        int unrelated = 8;\n\
+        Debug.Log(unrelated + count);\n\
+    }\n\
+}\n";
+    team.write("bob", "Assets/Scripts/Door.cs", door);
+    team.write(
+        "bob",
+        "Assets/Scripts/Door.cs.meta",
+        "fileFormatVersion: 2\nguid: 0000000000000000000000000000d00d\n",
+    );
+    let scene = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Component:\n  - component: {fileID: 101}\n  - component: {fileID: 102}\n  m_Layer: 0\n  m_Name: Button\n--- !u!4 &101\nTransform:\n  m_GameObject: {fileID: 100}\n  m_Children: []\n  m_Father: {fileID: 0}\n--- !u!114 &102\nMonoBehaviour:\n  m_GameObject: {fileID: 100}\n  m_Script: {fileID: 11500000, guid: 0000000000000000000000000000d00d, type: 3}\n  target: 8\n  count: 8\n";
+    team.write("bob", SCENE, scene);
+
+    let code = team.gang("bob", &["layers", "code"]);
+    assert!(
+        code.stdout.contains("Assets/Scripts/Door.cs:5  layer 8"),
+        "{code:?}"
+    );
+    assert!(
+        code.stdout.contains("GameObject.layer ← slot ← Interact"),
+        "{code:?}"
+    );
+    let save = team.gang("bob", &["save", "-m", "door"]);
+    assert_eq!(save.code, Some(0), "{save:?}");
+    assert!(
+        save.stdout
+            .contains("Moved your layer \"Door\" from 8 to 9"),
+        "{save:?}"
+    );
+    let code = team.read("bob", "Assets/Scripts/Door.cs");
+    assert!(code.contains("const int Interact = 9;"), "{code}");
+    assert!(code.contains("Vector3.forward, 10f, 512)"), "{code}");
+    assert!(code.contains("int target = 9;"), "{code}");
+    assert!(code.contains("int count = 8;"), "{code}");
+    assert!(code.contains("int unrelated = 8;"), "{code}");
+    let scene = team.read("bob", SCENE);
+    assert!(scene.contains("  target: 9\n"), "{scene}");
+    assert!(scene.contains("  count: 8\n"), "{scene}");
+}

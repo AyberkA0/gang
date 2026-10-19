@@ -32,6 +32,9 @@ enum Action {
     Fix,
     /// Give up your reservation of a name
     Release { name: String },
+    /// List every place where scripts give Unity a layer by number, as the
+    /// C# compiler sees it (needs a Unity editor on this machine)
+    Code,
 }
 
 pub fn run(invocation: &Invocation) -> Result<i32> {
@@ -51,6 +54,7 @@ pub fn run(invocation: &Invocation) -> Result<i32> {
             }
             Ok(fix(&repo, &config, &clashes, "gang layers fix")?.unwrap_or(0))
         }
+        Some(Action::Code) => code(&repo),
         Some(Action::Release { name }) => {
             let released = claims::release(&repo, &name)?;
             if released == 0 {
@@ -269,6 +273,59 @@ pub fn status_notes(repo: &Repo) -> Vec<String> {
 /// date without anyone typing a command.
 pub fn background(repo: &Repo, config: &Config) {
     let _ = claims::sync(repo, config);
+}
+
+/// `gang layers code`: layer numbers in scripts, traced by the compiler.
+fn code(repo: &Repo) -> Result<i32> {
+    let mut any = false;
+    for project in unity::find_projects(repo.root()) {
+        let Some(analysis) = gang_core::csharp::analyze(repo, &project) else {
+            eprintln!(
+                "✗ No Unity editor with its C# compiler was found on this machine; this needs one."
+            );
+            return Ok(1);
+        };
+        if analysis.errors > 0 {
+            ui::warn(format!(
+                "the scripts did not fully compile ({} errors; is Library/ missing because Unity never opened the project?): uses through unresolved code may be missing",
+                analysis.errors
+            ));
+        }
+        for u in &analysis.uses {
+            let what = match (u.kind.as_str(), u.role, u.value) {
+                ("literal", gang_core::csharp::Role::Index, Some(v)) => format!("layer {v}"),
+                ("literal", gang_core::csharp::Role::Mask, Some(v)) => {
+                    let layers: Vec<String> = (0..32)
+                        .filter(|b| (v as u64 as u32) & (1u32 << b) != 0)
+                        .map(|b| b.to_string())
+                        .collect();
+                    format!("mask of layers {}", layers.join(", "))
+                }
+                ("unknown", ..) => "a value read at run time".to_owned(),
+                ("implicit-enum", _, Some(v)) => format!("layer {v} (enum position)"),
+                (kind, _, Some(v)) => format!("{v} ({kind})"),
+                (kind, ..) => kind.to_owned(),
+            };
+            if u.kind == "literal" && u.value == Some(0) {
+                continue;
+            }
+            any = true;
+            println!(
+                "{}:{}  {:<28} {}  →  {}",
+                u.file, u.line, what, u.text, u.via
+            );
+        }
+    }
+    if any {
+        println!();
+        ui::hint("Scripts that use names never need to change when a layer moves:");
+        ui::hint(
+            "LayerMask.NameToLayer(\"Door\") for one layer, LayerMask.GetMask(\"Door\", \"Wall\") for a mask.",
+        );
+    } else {
+        println!("No script gives Unity a layer by number.");
+    }
+    Ok(0)
 }
 
 fn list(repo: &Repo, config: &Config, json: bool) -> Result<i32> {

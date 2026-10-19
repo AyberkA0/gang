@@ -7,6 +7,7 @@ pub mod claims;
 pub mod clock;
 pub mod commands;
 pub mod config;
+pub mod csharp;
 pub mod doctor;
 pub mod git;
 pub mod guards;
