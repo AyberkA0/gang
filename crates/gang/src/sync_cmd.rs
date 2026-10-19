@@ -199,6 +199,9 @@ fn push_failed(stderr: &str, outgoing: usize) {
 /// `upstream` (DESIGN.md §14.2): the layer remap.
 pub fn pre_merge(repo: &Repo, upstream: &str, rebase: bool) -> Result<()> {
     gang_core::layers::forget_rebase(repo);
+    for warning in gang_core::layers::removed_in_use(repo, upstream).unwrap_or_default() {
+        ui::warn(warning);
+    }
     let Some(report) = gang_core::layers::run(repo, upstream)? else {
         return Ok(());
     };
@@ -398,7 +401,8 @@ fn summarize(repo: &Repo, before: &str, names: &str) {
             continue;
         };
         let changes = gang_merge::diff::diff(&old, &new, &rules);
-        let ctx = gang_merge::render::Context::new(&old, &new, Some(&guids));
+        let mut ctx = gang_merge::render::Context::new(&old, &new, Some(&guids));
+        ctx.layer_names = gang_core::layers::names_for(repo, &path);
         let lines = gang_merge::render::render(&changes, &ctx, false);
         println!(
             "  {}: {} change{}",

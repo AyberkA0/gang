@@ -1146,3 +1146,167 @@ fn an_asset_added_twice_keeps_one_guid_and_every_reference() {
         );
     }
 }
+
+/// HARDENING L5: the collision matrix moves with the layer, and the two
+/// people's matrix settings merge cell by cell without a question.
+#[test]
+fn the_collision_matrix_moves_with_the_layer() {
+    let team = Team::new();
+    let dynamics = "ProjectSettings/DynamicsManager.asset";
+    let matrix = |off: &[(usize, usize)]| -> String {
+        let mut rows = [u32::MAX; 32];
+        for (a, b) in off {
+            rows[*a] &= !(1 << b);
+            rows[*b] &= !(1 << a);
+        }
+        let hex: String = rows
+            .iter()
+            .flat_map(|r| r.to_le_bytes())
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!55 &1\nPhysicsManager:\n  m_ObjectHideFlags: 0\n  serializedVersion: 13\n  m_Gravity: {{x: 0, y: -9.81, z: 0}}\n  m_LayerCollisionMatrix: {hex}\n"
+        )
+    };
+    for user in ["alice", "bob"] {
+        team.write(user, dynamics, &matrix(&[]));
+    }
+    // Alice: Pickup = 8, pickups ignore each other. Bob: UI3D = 8, UI3D
+    // ignores Water (4).
+    clash_on_layer_8(&team);
+    team.write("alice", dynamics, &matrix(&[(8, 8)]));
+    assert_eq!(team.sync("alice", "pickups ignore pickups").code, Some(0));
+    team.write("bob", dynamics, &matrix(&[(8, 4)]));
+    let sync = team.sync("bob", "UI3D ignores water");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stdout
+            .contains("ProjectSettings/DynamicsManager.asset: collision matrix (layer 8 → 9)"),
+        "{sync:?}"
+    );
+    // Pickup (8) still ignores itself; UI3D (now 9) ignores Water.
+    assert_eq!(team.read("bob", dynamics), matrix(&[(8, 8), (9, 4)]));
+    let sync = team.sync("alice", "-");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stdout
+            .contains("PhysicsManager › Collision  Water × UI3D: ignore each other"),
+        "{sync:?}"
+    );
+    assert_eq!(team.read("alice", dynamics), matrix(&[(8, 8), (9, 4)]));
+}
+
+/// HARDENING L7: when no layer is free, the remap cannot move ours. The sync
+/// stops before merging and says what to do, instead of letting a "which
+/// name?" question silently move the other side's objects.
+#[test]
+fn a_clash_with_no_free_layer_stops_and_says_why() {
+    let team = Team::new();
+    team.sandbox
+        .env
+        .lock()
+        .unwrap()
+        .push(("GANG_NO_CLAIMS".into(), "1".into()));
+    let mut full: Vec<String> = vec![
+        "Default".into(),
+        "TransparentFX".into(),
+        "Ignore Raycast".into(),
+        String::new(),
+        "Water".into(),
+        "UI".into(),
+        String::new(),
+        String::new(),
+        String::new(),
+    ];
+    full.extend((9..32).map(|i| format!("Used{i}")));
+    let names = |extra: &'static str| -> Vec<&str> {
+        let mut list: Vec<&str> = full.iter().map(String::as_str).collect();
+        list[8] = extra;
+        list
+    };
+    for user in ["alice", "bob"] {
+        team.write(
+            user,
+            "ProjectSettings/TagManager.asset",
+            &tag_manager(&names("")),
+        );
+    }
+    assert_eq!(team.sync("alice", "tags").code, Some(0));
+    assert_eq!(team.sync("bob", "tags").code, Some(0));
+    team.write(
+        "alice",
+        "ProjectSettings/TagManager.asset",
+        &tag_manager(&names("Pickup")),
+    );
+    assert_eq!(team.sync("alice", "Pickup").code, Some(0));
+    team.write(
+        "bob",
+        "ProjectSettings/TagManager.asset",
+        &tag_manager(&names("UI3D")),
+    );
+    let sync = team.sync("bob", "UI3D");
+    assert_ne!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr.contains("no layer is free to move \"UI3D\" to"),
+        "{sync:?}"
+    );
+    assert!(sync.stderr.contains("Free a layer first"), "{sync:?}");
+    // Nothing was merged.
+    let merge_head = team.sandbox.dir.path().join("bob/.git/MERGE_HEAD");
+    assert!(!merge_head.exists());
+}
+
+/// Thought experiment TE42: Alice removes layer 8 while Bob puts objects
+/// on it. The removal merges silently and Bob's objects end up on a layer
+/// with no name, so the sync says so.
+#[test]
+fn a_removed_layer_still_in_use_is_reported() {
+    let team = Team::new();
+    let mut layers = vec![
+        "Default",
+        "TransparentFX",
+        "Ignore Raycast",
+        "",
+        "Water",
+        "UI",
+        "",
+        "",
+        "Pickup",
+    ];
+    for user in ["alice", "bob"] {
+        team.write(
+            user,
+            "ProjectSettings/TagManager.asset",
+            &tag_manager(&layers),
+        );
+    }
+    assert_eq!(team.sync("alice", "tags").code, Some(0));
+    assert_eq!(team.sync("bob", "tags").code, Some(0));
+    layers[8] = "";
+    team.write(
+        "alice",
+        "ProjectSettings/TagManager.asset",
+        &tag_manager(&layers),
+    );
+    assert_eq!(team.sync("alice", "no more pickups").code, Some(0));
+    team.write(
+        "bob",
+        SCENE,
+        &scene("0", "2.5", "").replace("  m_Name: Player\n", "  m_Name: Player\n  m_Layer: 8\n"),
+    );
+    let sync = team.sync("bob", "player on pickup");
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stderr.contains(
+            "The incoming changes removed layer 8 \"Pickup\", but your changes put 1 object on it"
+        ),
+        "{sync:?}"
+    );
+    let doctor = team.gang("bob", &["doctor"]);
+    assert!(
+        doctor
+            .stdout
+            .contains("objects are on layer 8, which has no name"),
+        "{doctor:?}"
+    );
+}

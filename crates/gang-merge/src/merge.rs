@@ -522,6 +522,37 @@ impl Merger<'_> {
                     });
                 }
             }
+            // Scripting define symbols are a set written as `A;B;C`: each
+            // side's additions and removals both apply, never a question.
+            (_, Some(Value::Scalar(os)), Some(Value::Scalar(ts)))
+                if path.iter().any(|p| p == "scriptingDefineSymbols")
+                    && os.flow_entries().is_none()
+                    && ts.flow_entries().is_none() =>
+            {
+                let split = |text: String| -> Vec<String> {
+                    text.split(';')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                };
+                let base = b
+                    .and_then(Value::as_scalar)
+                    .map(|s| split(s.value()))
+                    .unwrap_or_default();
+                let (ours, theirs) = (split(os.value()), split(ts.value()));
+                let mut merged: Vec<String> = ours
+                    .iter()
+                    .filter(|s| theirs.contains(s) || !base.contains(s))
+                    .cloned()
+                    .collect();
+                for symbol in &theirs {
+                    if !merged.contains(symbol) && !base.contains(symbol) {
+                        merged.push(symbol.clone());
+                    }
+                }
+                return Some(Value::Scalar(Scalar::plain(&merged.join(";"))));
+            }
             (_, Some(Value::Scalar(os)), Some(Value::Scalar(ts))) => {
                 let flows = (
                     b.and_then(Value::as_scalar).map(Scalar::flow_entries),

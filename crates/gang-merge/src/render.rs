@@ -15,6 +15,8 @@ pub struct Context<'a> {
     pub old_hierarchy: Hierarchy,
     pub new_hierarchy: Hierarchy,
     pub guids: Option<&'a GuidIndex>,
+    /// Layer names, for collision matrices (`Pickup × Water`).
+    pub layer_names: Vec<String>,
 }
 
 impl<'a> Context<'a> {
@@ -26,6 +28,7 @@ impl<'a> Context<'a> {
             old_hierarchy: Hierarchy::build_with(old, &lookup),
             new_hierarchy: Hierarchy::build_with(new, &lookup),
             guids,
+            layer_names: Vec::new(),
         }
     }
 
@@ -205,6 +208,15 @@ pub fn render(changes: &[DocChange], ctx: &Context<'_>, include_noise: bool) -> 
                         || (prop.noise && !include_noise)
                     {
                         continue;
+                    }
+                    if field == crate::matrix::KEY {
+                        let rows = |v: &Option<String>| v.as_deref().and_then(crate::matrix::parse);
+                        if let (Some(old), Some(new)) = (rows(&prop.old), rows(&prop.new)) {
+                            for cell in crate::matrix::describe(&old, &new, &ctx.layer_names) {
+                                lines.push(format!("~ {place} › Collision  {cell}"));
+                            }
+                            continue;
+                        }
                     }
                     let noise = if prop.noise { "  (noise)" } else { "" };
                     let text = match (&prop.old, &prop.new) {

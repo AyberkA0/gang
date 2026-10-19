@@ -589,3 +589,21 @@ fn reparented_child_keeps_its_world_position() {
         "{spawner}"
     );
 }
+
+/// Thought experiment TE24: scripting define symbols are a set; one side
+/// adds a symbol, the other adds another and removes one: all of it applies.
+#[test]
+fn define_symbols_merge_as_a_set() {
+    let settings = |symbols: &str| {
+        format!(
+            "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!129 &1\nPlayerSettings:\n  productName: Game\n  scriptingDefineSymbols:\n    Standalone: {symbols}\n"
+        )
+    };
+    let (text, merged) = auto(
+        &settings("A;B"),
+        &settings("A;B;NETCODE"),
+        &settings("B;DEBUG_AI"),
+    );
+    assert!(merged.conflicts.is_empty(), "{:?}", merged.conflicts);
+    assert_eq!(text, settings("B;NETCODE;DEBUG_AI"));
+}

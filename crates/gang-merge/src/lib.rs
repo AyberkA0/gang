@@ -4,6 +4,7 @@
 pub mod describe;
 pub mod diff;
 pub mod json;
+pub mod matrix;
 pub mod merge;
 pub mod names;
 pub mod render;

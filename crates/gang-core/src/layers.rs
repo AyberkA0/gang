@@ -73,9 +73,30 @@ pub fn layer_names(text: &str) -> Option<Vec<String>> {
     )
 }
 
+/// The layer names of the project that holds `path` (working tree), for
+/// naming collision matrix cells.
+pub fn names_for(repo: &Repo, path: &str) -> Vec<String> {
+    unity::find_projects(repo.root())
+        .into_iter()
+        .filter(|p| p.dir.is_empty() || path.starts_with(&format!("{}/", p.dir)))
+        .max_by_key(|p| p.dir.len())
+        .and_then(|p| semantic::worktree(repo, &tag_manager(&p)))
+        .and_then(|t| layer_names(&t))
+        .unwrap_or_default()
+}
+
 /// The layer moves a merge of `upstream` into `HEAD` needs, per project.
 pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject, Vec<Move>)>> {
+    Ok(plan_all(repo, base, upstream)?.0)
+}
+
+/// The moves for each project.
+type Plans = Vec<(UnityProject, Vec<Move>)>;
+
+/// [`plan`], and the clashes nothing can fix because no layer is free.
+fn plan_all(repo: &Repo, base: &str, upstream: &str) -> Result<(Plans, Vec<String>)> {
     let mut plans = Vec::new();
+    let mut stuck = Vec::new();
     for project in unity::find_projects(repo.root()) {
         let path = tag_manager(&project);
         let read = |rev: &str| -> Option<Vec<String>> {
@@ -158,6 +179,10 @@ pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject
                         taken_by: format!("Layer {i} is {ti:?} on {upstream} ({who})"),
                         follow: false,
                     });
+                } else {
+                    stuck.push(format!(
+                        "Layer {i} is {ti:?} on {upstream} ({who}) and {oi:?} here, and no layer is free to move {oi:?} to"
+                    ));
                 }
             }
         }
@@ -165,7 +190,7 @@ pub fn plan(repo: &Repo, base: &str, upstream: &str) -> Result<Vec<(UnityProject
             plans.push((project, moves));
         }
     }
-    Ok(plans)
+    Ok((plans, stuck))
 }
 
 /// Rewrites the working tree for the moves: TagManager, objects and masks in
@@ -281,9 +306,26 @@ fn apply_in(
         }
         let name = path.rsplit('/').next().unwrap_or(&path);
         if name == "DynamicsManager.asset" || name == "Physics2DSettings.asset" {
-            report.review.push(format!(
-                "{path}: check the collision matrix for the moved layer"
-            ));
+            // The moved layer takes its row and column of the collision
+            // matrix with it; the number it leaves gets the free one's.
+            let Some(text) = semantic::worktree(repo, &path) else {
+                continue;
+            };
+            let Ok(mut file) = unity_yaml::parse(&text) else {
+                continue;
+            };
+            let mut moved = Vec::new();
+            for m in moves {
+                if crate::matrix::move_layer(&mut file, m.from, m.to) {
+                    moved.push(format!("layer {} → {}", m.from, m.to));
+                }
+            }
+            if !moved.is_empty() {
+                std::fs::write(repo.root().join(&path), file.to_text())?;
+                report
+                    .updated
+                    .push(format!("{path}: collision matrix ({})", moved.join(", ")));
+            }
             continue;
         }
         if attributes::is_unity_yaml(&path) {
@@ -689,6 +731,65 @@ fn m_to(moves: &[Move]) -> String {
         .join(", ")
 }
 
+/// Layers one side removed while the other side's changes put objects on
+/// them (a removed name merges silently, and those objects end up on a
+/// layer with no name): one line each, for the person to look at.
+pub fn removed_in_use(repo: &Repo, upstream: &str) -> Result<Vec<String>> {
+    let Some(base) = repo
+        .try_run(["merge-base", "HEAD", upstream])?
+        .map(|b| b.trim().to_owned())
+    else {
+        return Ok(Vec::new());
+    };
+    let mut warnings = Vec::new();
+    for project in unity::find_projects(repo.root()) {
+        let path = tag_manager(&project);
+        let read = |rev: &str| -> Option<Vec<String>> {
+            semantic::blob(repo, &format!("{rev}:{path}"))
+                .ok()
+                .flatten()
+                .and_then(|t| layer_names(&t))
+        };
+        let (Some(b), Some(o), Some(t)) = (read(&base), read("HEAD"), read(upstream)) else {
+            continue;
+        };
+        let get = |list: &[String], i: usize| list.get(i).cloned().unwrap_or_default();
+        for i in FIRST_USER_LAYER..LAYER_COUNT {
+            let (bi, oi, ti) = (get(&b, i), get(&o, i), get(&t, i));
+            if bi.is_empty() {
+                continue;
+            }
+            let (remover, user_range, user) = if oi.is_empty() && ti == bi {
+                ("You", format!("{base}..{upstream}"), "the incoming changes")
+            } else if ti.is_empty() && oi == bi {
+                (
+                    "The incoming changes",
+                    format!("{base}..HEAD"),
+                    "your changes",
+                )
+            } else {
+                continue;
+            };
+            let added = repo.run(["diff", "-U0", &user_range, "--", "*.unity", "*.prefab"])?;
+            let objects = added
+                .lines()
+                .filter(|l| {
+                    l.starts_with('+')
+                        && l.trim_start_matches('+').trim() == format!("m_Layer: {i}")
+                })
+                .count();
+            if objects > 0 {
+                warnings.push(format!(
+                    "{remover} removed layer {i} {bi:?}, but {user} put {objects} object{} on it; after the merge {} on a layer with no name",
+                    if objects == 1 { "" } else { "s" },
+                    if objects == 1 { "it is" } else { "they are" }
+                ));
+            }
+        }
+    }
+    Ok(warnings)
+}
+
 /// Plans, applies and commits the remap before merging `upstream`.
 /// `None` when nothing needed to move.
 pub fn run(repo: &Repo, upstream: &str) -> Result<Option<Report>> {
@@ -698,7 +799,17 @@ pub fn run(repo: &Repo, upstream: &str) -> Result<Option<Report>> {
     else {
         return Ok(None);
     };
-    let plans = plan(repo, &base, upstream)?;
+    let (plans, stuck) = plan_all(repo, &base, upstream)?;
+    if !stuck.is_empty() {
+        // The merge would ask which name keeps the number, and the other
+        // side's objects would silently change layer: stop and say why.
+        anyhow::bail!(
+            "{}.
+Free a layer first (Project Settings › Tags and Layers: clear one nobody uses, and move its objects), commit, then sync again",
+            stuck.join(".
+")
+        );
+    }
     if plans.is_empty() {
         return Ok(None);
     }

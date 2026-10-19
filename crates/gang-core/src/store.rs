@@ -197,11 +197,13 @@ pub fn merge_texts(
             })
         }
         Format::Unity => {
-            let (b, o, t) = (
+            let (b, mut o, mut t) = (
                 unity_yaml::parse(base).ok()?,
                 unity_yaml::parse(ours).ok()?,
                 unity_yaml::parse(theirs).ok()?,
             );
+            // Collision matrices merge cell by cell, never as one value.
+            crate::matrix::premerge(&b, &mut o, &mut t);
             let merged = merge(&b, &o, &t, rules, &decisions);
             let questions = merged
                 .conflicts
@@ -304,6 +306,14 @@ pub fn driver_merge(
             explain_layer_clash(repo, question, theirs_name);
         }
     }
+    if matches!(
+        path.rsplit('/').next(),
+        Some("TagManager.asset" | "NavMeshAreas.asset")
+    ) {
+        for question in &mut questions {
+            explain_table_clash(question, theirs_name);
+        }
+    }
     let dir = dir(repo, path);
     if fs::create_dir_all(&dir).is_ok() {
         let _ = fs::write(dir.join("base"), base);
@@ -369,6 +379,46 @@ fn explain_layer_clash(repo: &Repo, question: &mut Question, theirs_name: &str) 
     );
 }
 
+/// A rendering layer or NavMesh area both sides added at the same number
+/// (HARDENING L9). GANG reserves these numbers (§14.6) but does not move
+/// them at merge time; the question says what picking a name means.
+fn explain_table_clash(question: &mut Question, theirs_name: &str) {
+    let mut parts = question.id.split('/').rev();
+    let (index, table) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(i), Some("m_RenderingLayers"), _) => (i, "rendering layer"),
+        (Some("name"), Some(i), Some("areas")) => (i, "NavMesh area"),
+        _ => return,
+    };
+    let Some(index) = index
+        .strip_prefix('[')
+        .and_then(|i| i.strip_suffix(']'))
+        .and_then(|i| i.parse::<u32>().ok())
+    else {
+        return;
+    };
+    let filled = |v: &Option<String>| v.as_deref().is_some_and(|v| !v.trim().is_empty());
+    if filled(&question.base) || !filled(&question.ours) || !filled(&question.theirs) {
+        return;
+    }
+    let (ours, theirs) = (
+        question.ours.as_deref().unwrap_or_default().trim(),
+        question.theirs.as_deref().unwrap_or_default().trim(),
+    );
+    let where_ = if table == "NavMesh area" {
+        "the Navigation window's Areas tab, then the NavMesh modifiers, links and agents that use it"
+    } else {
+        "Project Settings › Tags and Layers, then the renderers' Rendering Layer Mask and the lights that use it"
+    };
+    question.why = format!(
+        "{} {index} is new on both sides: {ours:?} for you, {theirs:?} for {theirs_name}.          Whichever name you pick, the other side's work that uses number {index} changes meaning.          Pick the name that keeps {index}, then in Unity give the other one a free number in {where_}.",
+        if table == "NavMesh area" {
+            "NavMesh area"
+        } else {
+            "Rendering layer"
+        }
+    );
+}
+
 /// Re-runs a pending merge with its answers.
 pub fn apply(repo: &Repo, pending: &Pending, rules: &Rules) -> Result<String> {
     let (base, ours, theirs) = versions(repo, &pending.path)?;
@@ -385,4 +435,78 @@ pub fn apply(repo: &Repo, pending: &Pending, rules: &Rules) -> Result<String> {
     )
     .context("the stored versions no longer parse")?;
     Ok(outcome.text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn questions(path: &str, base: &str, ours: &str, theirs: &str) -> Vec<Question> {
+        let outcome = merge_texts(
+            Format::Unity,
+            base,
+            ours,
+            theirs,
+            &Rules::default(),
+            &BTreeMap::new(),
+            None,
+            "ayberk",
+        )
+        .unwrap();
+        let mut questions = outcome.questions;
+        for q in &mut questions {
+            if path.ends_with("TagManager.asset") || path.ends_with("NavMeshAreas.asset") {
+                explain_table_clash(q, "ayberk");
+            }
+        }
+        questions
+    }
+
+    #[test]
+    fn navmesh_area_clashes_are_explained() {
+        let areas = |name: &str| {
+            format!(
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!126 &1\nNavMeshProjectSettings:\n  serializedVersion: 2\n  areas:\n  - name: Walkable\n    cost: 1\n  - name: Not Walkable\n    cost: 1\n  - name: Jump\n    cost: 2\n  - name: {name}\n    cost: 1\n"
+            )
+        };
+        let qs = questions(
+            "ProjectSettings/NavMeshAreas.asset",
+            &areas(""),
+            &areas("Water"),
+            &areas("Mud"),
+        );
+        assert_eq!(qs.len(), 1, "{qs:?}");
+        assert!(
+            qs[0].why.starts_with(
+                "NavMesh area 3 is new on both sides: \"Water\" for you, \"Mud\" for ayberk."
+            ),
+            "{} / {}",
+            qs[0].id,
+            qs[0].why
+        );
+    }
+
+    #[test]
+    fn rendering_layer_clashes_are_explained() {
+        let tags = |name: &str| {
+            format!(
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!78 &1\nTagManager:\n  serializedVersion: 3\n  tags: []\n  layers:\n  - Default\n  m_SortingLayers:\n  - name: Default\n    uniqueID: 0\n    locked: 0\n  m_RenderingLayers:\n  - Default\n  - {name}\n"
+            )
+        };
+        let qs = questions(
+            "ProjectSettings/TagManager.asset",
+            &tags(""),
+            &tags("Glow"),
+            &tags("Outline"),
+        );
+        assert_eq!(qs.len(), 1, "{qs:?}");
+        assert!(
+            qs[0]
+                .why
+                .starts_with("Rendering layer 1 is new on both sides"),
+            "{} / {}",
+            qs[0].id,
+            qs[0].why
+        );
+    }
 }
