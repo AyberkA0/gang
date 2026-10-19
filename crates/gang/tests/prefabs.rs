@@ -141,3 +141,23 @@ fn objects_that_are_gone_are_reported() {
     assert!(save.stderr.contains("(2 found again, 1 gone)"), "{save:?}");
     assert_eq!(team.read("alice", SCENE), level(10, 20, &[(500, "5")]));
 }
+
+/// Field test D2: an instance's override reads like the Inspector, not
+/// like `m_Modifications[0].value`.
+#[test]
+fn instance_overrides_read_like_the_inspector() {
+    let team = Team::new();
+    team.write("alice", SCENE, &level(1, 2, &[(500, "8")]));
+    assert_eq!(
+        team.gang("alice", &["sync", "-m", "move the imp"]).code,
+        Some(0)
+    );
+    let sync = team.gang("bob", &["sync"]);
+    assert_eq!(sync.code, Some(0), "{sync:?}");
+    assert!(
+        sync.stdout
+            .contains("~ Imp500 › Transform › Position.x  5 → 8"),
+        "{sync:?}"
+    );
+    assert!(!sync.stdout.contains("m_Modifications"), "{sync:?}");
+}

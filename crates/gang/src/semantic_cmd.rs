@@ -220,6 +220,7 @@ fn read_side(repo: &Repo, side: &Side, path: &str) -> Result<Option<String>> {
 
 /// Semantic lines for one file between two texts.
 fn file_lines(
+    root: &std::path::Path,
     old: Option<&str>,
     new: Option<&str>,
     guids: &GuidIndex,
@@ -238,7 +239,8 @@ fn file_lines(
         None => empty,
     };
     let changes = diff::diff(&old, &new, rules);
-    let ctx = RenderContext::new(&old, &new, Some(guids));
+    let mut ctx = RenderContext::new(&old, &new, Some(guids));
+    ctx.root = Some(root.to_owned());
     let mut lines = render::render(&changes, &ctx, false);
     if lines.is_empty() && !changes.is_empty() {
         let noise = changes.iter().filter(|c| c.is_noise()).count();
@@ -315,7 +317,7 @@ fn print_semantic(
     for path in files {
         let (old, new) = versions(path)?;
         println!("{}", ui::bold(path));
-        match file_lines(old.as_deref(), new.as_deref(), &guids, &rules) {
+        match file_lines(repo.root(), old.as_deref(), new.as_deref(), &guids, &rules) {
             Some(lines) if lines.is_empty() => println!("  (no changes)"),
             Some(lines) => {
                 for line in lines {
@@ -422,8 +424,8 @@ pub fn log(invocation: &Invocation, repo: &Repo) -> Result<Option<i32>> {
                 None => None,
             };
             let new = semantic::blob(repo, &format!("{commit}:{path}"))?;
-            let lines =
-                file_lines(old.as_deref(), new.as_deref(), &guids, &rules).unwrap_or_default();
+            let lines = file_lines(repo.root(), old.as_deref(), new.as_deref(), &guids, &rules)
+                .unwrap_or_default();
             let name = path.rsplit('/').next().unwrap_or(path);
             println!("  {name}");
             for line in lines.iter().take(12) {

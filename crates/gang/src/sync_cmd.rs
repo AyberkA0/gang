@@ -415,6 +415,7 @@ fn summarize(repo: &Repo, before: &str, names: &str) {
         let changes = gang_merge::diff::diff(&old, &new, &rules);
         let mut ctx = gang_merge::render::Context::new(&old, &new, Some(&guids));
         ctx.layer_names = gang_core::layers::names_for(repo, &path);
+        ctx.root = Some(repo.root().to_owned());
         let lines = gang_merge::render::render(&changes, &ctx, false);
         // Whose work it was (field test E8).
         let authors: Vec<String> = repo
