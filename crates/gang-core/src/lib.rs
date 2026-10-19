@@ -11,6 +11,7 @@ pub mod csharp;
 pub mod doctor;
 pub mod git;
 pub mod guards;
+pub mod guid_moves;
 pub mod ignore;
 pub mod invocation;
 pub mod layers;

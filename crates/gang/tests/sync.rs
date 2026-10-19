@@ -1062,3 +1062,87 @@ fn unreadable_unity_files_never_get_conflict_markers() {
     let bytes = std::fs::read(team.sandbox.dir.path().join("bob").join(path)).unwrap();
     assert_eq!(bytes, version("5", "1"));
 }
+
+/// HARDENING §1.4: both sides add the same asset, each with its own GUID.
+/// The merge keeps the GUID already shared without a question, and the
+/// references Bob made to his own GUID follow it.
+#[test]
+fn an_asset_added_twice_keeps_one_guid_and_every_reference() {
+    for same_content in [true, false] {
+        let team = Team::new();
+        let logo = "Assets/Art/Logo.png";
+        let meta = |guid: &str| {
+            format!(
+                "fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  maxTextureSize: 2048\n"
+            )
+        };
+        let alice_guid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1";
+        let bob_guid = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2";
+        for (user, guid, bytes) in [
+            ("alice", alice_guid, b"\x89PNG alice".as_slice()),
+            (
+                "bob",
+                bob_guid,
+                if same_content {
+                    b"\x89PNG alice".as_slice()
+                } else {
+                    b"\x89PNG bob".as_slice()
+                },
+            ),
+        ] {
+            let dir = team.sandbox.dir.path().join(user);
+            std::fs::create_dir_all(dir.join("Assets/Art")).unwrap();
+            std::fs::write(dir.join(logo), bytes).unwrap();
+            team.write(user, &format!("{logo}.meta"), &meta(guid));
+            team.write(
+                user,
+                "Assets/Art.meta",
+                &format!(
+                    "fileFormatVersion: 2\nguid: {}\nfolderAsset: yes\n",
+                    if user == "alice" {
+                        "f".repeat(32)
+                    } else {
+                        "e".repeat(32)
+                    }
+                ),
+            );
+        }
+        let with_logo = scene("0", "2.5", "").replace(
+            "  jumpHeight: 2.5\n",
+            &format!("  jumpHeight: 2.5\n  icon: {{fileID: 2800000, guid: {bob_guid}, type: 3}}\n"),
+        );
+        team.write("bob", SCENE, &with_logo);
+        assert_eq!(team.sync("alice", "logo").code, Some(0));
+
+        let sync = team.sync("bob", "logo too");
+        if same_content {
+            assert_eq!(sync.code, Some(0), "{sync:?}");
+        } else {
+            // The pictures differ: that is a real question, the GUID is not.
+            assert_eq!(sync.code, Some(1), "{sync:?}");
+            let list = team.gang("bob", &["bang", "--list"]);
+            assert!(
+                list.stdout.contains("Logo.png  (text or binary conflict)"),
+                "{list:?}"
+            );
+            assert!(!list.stdout.contains("Logo.png.meta"), "{list:?}");
+            let bang = team.gang("bob", &["bang", "--answer", "mine"]);
+            assert_eq!(bang.code, Some(0), "{bang:?}");
+        }
+        assert_eq!(team.read("bob", &format!("{logo}.meta")), meta(alice_guid));
+        let scene_text = team.read("bob", SCENE);
+        assert!(
+            scene_text.contains(&format!("guid: {alice_guid}")),
+            "{scene_text}"
+        );
+        assert!(!scene_text.contains(bob_guid), "{scene_text}");
+        let log = team
+            .sandbox
+            .run_in("bob", "git", &["log", "-1", "--format=%s"]);
+        assert_eq!(
+            log.stdout.trim(),
+            "gang: point references at the shared GUIDs",
+            "{log:?}"
+        );
+    }
+}

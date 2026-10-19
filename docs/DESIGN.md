@@ -823,6 +823,7 @@ Known gaps (see [HARDENING.md](HARDENING.md) §1.1): collision matrices are not 
 | `.gitignore`, `.gitattributes` | Managed block regenerated with the newest GANG version; project rules as a sorted union (§17). Never conflicts |
 | Code and other text | git's normal merge; conflicts answered hunk by hunk in bang |
 | Binary | No merge; bang offers mine / theirs / compare |
+| `.meta` of an asset both sides added | The GUID already shared (the upstream side) is kept without a question; importer settings merge as usual. After the merge, references our side made to its own GUID are pointed at the shared one (when nothing else uses the old GUID) in a commit of its own, `gang: point references at the shared GUIDs` |
 
 ### 14.6 Reserved numbers
 

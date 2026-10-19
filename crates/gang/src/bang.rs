@@ -810,9 +810,17 @@ fn finish_operation(repo: &Repo) -> Result<i32> {
             return Ok(0);
         };
     if !ui::interactive() || ui::confirm(&format!("{what} now?"), true)? {
+        let merging = what == "Commit the merge";
         let code = git::run_inherited(args)?;
         if code == 0 {
             ui::done("Done.");
+            if merging {
+                if let Err(err) = crate::prefabs_cmd::after_merge(repo, "HEAD^1") {
+                    ui::warn(format!(
+                        "could not check references after the merge: {err:#}"
+                    ));
+                }
+            }
         }
         return Ok(code);
     }

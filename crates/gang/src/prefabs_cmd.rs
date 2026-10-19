@@ -98,9 +98,48 @@ pub fn before_save(repo: &Repo) -> Result<Option<i32>> {
     Ok(None)
 }
 
-/// After a merge brought in work from `before`..HEAD: our files that still
-/// point at a rebuilt prefab's old ids are fixed in a commit of their own.
+/// After a merge brought in work from `before`..HEAD: references our side
+/// made that the merge left pointing at nothing are fixed, each kind in a
+/// commit of its own.
 pub fn after_merge(repo: &Repo, before: &str) -> Result<()> {
+    rebuilt_prefabs(repo, before)?;
+    shared_guids(repo, before)
+}
+
+/// Both added the same asset; the merge kept the shared GUID.
+fn shared_guids(repo: &Repo, before: &str) -> Result<()> {
+    let moved = gang_core::guid_moves::repair(repo, before)?;
+    let touched: Vec<&String> = moved.iter().flat_map(|(_, _, _, files)| files).collect();
+    if touched.is_empty() {
+        return Ok(());
+    }
+    let mut message = String::from(
+        "gang: point references at the shared GUIDs
+
+",
+    );
+    for (asset, old, new, files) in &moved {
+        ui::warn(format!(
+            "{} was added on both sides; the merge kept the GUID already shared ({new}).",
+            short(asset)
+        ));
+        for file in files {
+            println!("    ✓ {file}: now points at the shared {}", short(asset));
+            message.push_str(&format!(
+                "- {file}: {asset} {old} -> {new}
+"
+            ));
+        }
+    }
+    for file in touched {
+        repo.run(["add", "--", file])?;
+    }
+    repo.run(["commit", "-q", "--no-verify", "-m", &message])?;
+    ui::done("Committed \"gang: point references at the shared GUIDs\"");
+    Ok(())
+}
+
+fn rebuilt_prefabs(repo: &Repo, before: &str) -> Result<()> {
     let report = prefab_ids::repair(repo, before, Some("HEAD"), true)?;
     if report.touched().is_empty() {
         if !report.files.is_empty() {

@@ -263,6 +263,26 @@ pub fn driver_merge(
         let _ = clear(repo, path);
         return Some((theirs.to_owned(), false));
     }
+    // Both added the same asset: its GUID is identity, not a choice. Keep
+    // the one already shared (the upstream side); references to ours are
+    // pointed at it after the merge (DESIGN.md §14.5).
+    let guid_of = |text: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix("guid:"))
+            .map(|g| g.trim().to_owned())
+    };
+    let ours_meta;
+    let ours = match (
+        path.ends_with(".meta") && base.trim().is_empty(),
+        guid_of(ours),
+        guid_of(theirs),
+    ) {
+        (true, Some(mine), Some(shared)) if mine != shared => {
+            ours_meta = ours.replacen(&format!("guid: {mine}"), &format!("guid: {shared}"), 1);
+            ours_meta.as_str()
+        }
+        _ => ours,
+    };
     let guids = crate::semantic::guid_index(repo);
     let outcome = merge_texts(
         format,
