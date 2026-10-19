@@ -74,13 +74,41 @@ pub fn open_questions(repo: &Repo) -> Result<usize> {
 }
 
 pub fn resolve(repo: &Repo, args: &Args) -> Result<i32> {
-    let unmerged = unmerged(repo)?;
-    // Forget stored conflicts of files that are no longer unmerged.
+    let mut unmerged = unmerged(repo)?;
+    // Stored conflicts of files that are no longer unmerged: settled with
+    // plain git (`git add`, an editor's "mark resolved"). Untouched since
+    // GANG left them, their open questions come back (R40); changed by
+    // hand, that was the person's own answer.
+    let outside = settled_outside(repo)?;
     for pending in store::pending(repo)? {
-        if !unmerged.contains(&pending.path) {
-            store::clear(repo, &pending.path)?;
+        if unmerged.contains(&pending.path) {
+            continue;
         }
+        if let Some((_, open, untouched)) = outside.iter().find(|(p, ..)| p.path == pending.path) {
+            let open = *open;
+            if *untouched
+                && repo
+                    .try_run(["update-index", "--unresolve", "--", &pending.path])?
+                    .is_some()
+            {
+                println!(
+                    "↺ {} was marked resolved outside GANG with {open} question{} unanswered; they are asked again.",
+                    pending.path,
+                    if open == 1 { "" } else { "s" }
+                );
+                continue;
+            }
+            println!(
+                "✓ {} was resolved by hand outside GANG; its {open} open question{} {} as you resolved {}.",
+                pending.path,
+                if open == 1 { "" } else { "s" },
+                if open == 1 { "stays" } else { "stay" },
+                if open == 1 { "it" } else { "them" }
+            );
+        }
+        store::clear(repo, &pending.path)?;
     }
+    unmerged = self::unmerged(repo)?;
     let mut files: Vec<Pending> = store::pending(repo)?
         .into_iter()
         .filter(|p| args.path.as_ref().is_none_or(|only| &p.path == only))
@@ -802,6 +830,52 @@ fn parse_hunks(text: &str) -> Vec<Part> {
         parts.push(Part::Text(plain));
     }
     parts
+}
+
+/// Files with stored conflicts that git no longer shows as unmerged while
+/// questions are open and the operation is still running: settled with
+/// plain git (`git add`, `commit -a`, an editor's "mark resolved"). With
+/// each: its open questions, and whether the file is exactly as GANG left
+/// it (untouched) rather than changed by hand.
+pub fn settled_outside(repo: &Repo) -> Result<Vec<(Pending, usize, bool)>> {
+    if !operation_running(repo) {
+        return Ok(Vec::new());
+    }
+    let unmerged = unmerged(repo)?;
+    let rules = semantic::rules(&Config::load(repo.root()).unwrap_or_default());
+    let mut out = Vec::new();
+    for pending in store::pending(repo)? {
+        if unmerged.contains(&pending.path) {
+            continue;
+        }
+        let open = pending
+            .questions
+            .iter()
+            .filter(|q| !pending.answers.contains_key(&q.id))
+            .count();
+        if open == 0 {
+            continue;
+        }
+        let staged = repo
+            .output(["show", &format!(":{}", pending.path)])
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        let left = store::apply(repo, &pending, &rules).ok();
+        let untouched = staged.is_some() && staged == left;
+        out.push((pending, open, untouched));
+    }
+    Ok(out)
+}
+
+/// A merge, rebase, cherry-pick, revert or stash apply waiting for answers.
+fn operation_running(repo: &Repo) -> bool {
+    let git_dir = repo.git_dir();
+    repo.rebasing()
+        || ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]
+            .iter()
+            .any(|head| git_dir.join(head).exists())
+        || repo.stash_mark().is_some()
 }
 
 /// After the last conflict: offer to finish the merge, or continue the

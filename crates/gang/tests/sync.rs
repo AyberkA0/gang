@@ -708,9 +708,11 @@ fn sync_finishes_a_merge_left_open() {
     // Answered by hand and staged, but not committed.
     team.write("bob", SCENE, &scene("0", "3", ""));
     team.sandbox.run_in("bob", "git", &["add", SCENE]);
-    assert_eq!(
-        team.gang("bob", &["bang", "--list"]).stdout,
-        "No conflicts to resolve.\n"
+    let list = team.gang("bob", &["bang", "--list"]).stdout;
+    assert!(
+        list.contains("was resolved by hand outside GANG")
+            && list.ends_with("No conflicts to resolve.\n"),
+        "{list}"
     );
 
     let sync = team.gang("bob", &["sync"]);
@@ -1913,4 +1915,88 @@ fn a_protected_branch_push_explains_the_way_in() {
         "{sync:?}"
     );
     assert!(sync.stderr.contains("gang pr merge <number>"), "{sync:?}");
+}
+
+/// Thought experiment R40: during a merge, `gang add -A` marked the scene
+/// settled as the merge driver left it, every open question answered "mine"
+/// without a word, and `gang bang` then said "No conflicts" and committed.
+/// The GANG commands that would do that stop; a plain `git add` (an
+/// editor's "mark resolved") of the untouched file is undone by gang bang,
+/// which asks the questions; a file changed by hand counts as answered.
+#[test]
+fn open_conflicts_are_not_settled_by_add_reset_or_checkout() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("1", "3", ""));
+    assert_eq!(team.sync("alice", "alice tuning").code, Some(0));
+    team.write("bob", SCENE, &scene("2", "4", ""));
+    assert_eq!(team.sync("bob", "bob tuning").code, Some(1));
+    for args in [
+        vec!["add", "-A"],
+        vec!["add", "Assets"],
+        vec!["reset", "--", SCENE],
+        vec!["rm", "--cached", SCENE],
+        vec!["checkout", "origin/main", "--", SCENE],
+        vec!["restore", "."],
+    ] {
+        let refused = team.gang("bob", &args);
+        assert_eq!(refused.code, Some(1), "{args:?} {refused:?}");
+        assert!(
+            refused
+                .stderr
+                .contains("would mark this file settled as it stands, with 2 questions unanswered"),
+            "{args:?} {refused:?}"
+        );
+    }
+    // Plain git, as an editor's "mark resolved" does it.
+    assert_eq!(team.gang("bob", &["git", "add", "-A"]).code, Some(0));
+    let list = team.gang("bob", &["bang", "--list"]);
+    assert!(
+        list.stdout.contains(
+            "was marked resolved outside GANG with 2 questions unanswered; they are asked again"
+        ),
+        "{list:?}"
+    );
+    assert!(list.stdout.contains("Jump Height  (open)"), "{list:?}");
+    assert_eq!(
+        team.gang("bob", &["bang", "--answer", "theirs"]).code,
+        Some(1)
+    );
+    assert_eq!(
+        team.gang("bob", &["bang", "--answer", "theirs"]).code,
+        Some(0)
+    );
+    assert_eq!(team.read("bob", SCENE), scene("1", "3", ""));
+
+    // Changed by hand, then added: the person's own answer.
+    team.write("alice", SCENE, &scene("5", "6", ""));
+    assert_eq!(team.sync("alice", "alice again").code, Some(0));
+    team.write("bob", SCENE, &scene("7", "8", ""));
+    assert_eq!(team.sync("bob", "bob again").code, Some(1));
+    team.write("bob", SCENE, &scene("9", "9", ""));
+    assert_eq!(team.gang("bob", &["git", "add", "-A"]).code, Some(0));
+    let bang = team.gang("bob", &["bang"]);
+    assert!(
+        bang.stdout.contains("was resolved by hand outside GANG"),
+        "{bang:?}"
+    );
+    assert_eq!(team.read("bob", SCENE), scene("9", "9", ""));
+}
+
+/// R40 with plain git all the way: `git commit -a` during a merge would
+/// commit the scene as the driver left it, the open questions answered
+/// "mine". The hook stops it; gang bang asks them.
+#[test]
+fn commit_all_during_a_merge_does_not_settle_open_questions() {
+    let team = Team::new();
+    team.write("alice", SCENE, &scene("1", "3", ""));
+    assert_eq!(team.sync("alice", "alice tuning").code, Some(0));
+    team.write("bob", SCENE, &scene("2", "4", ""));
+    assert_eq!(team.sync("bob", "bob tuning").code, Some(1));
+    let commit = team.gang("bob", &["git", "commit", "-q", "-a", "--no-edit"]);
+    assert_eq!(commit.code, Some(1), "{commit:?}");
+    assert!(
+        commit.stderr.contains("Assets/Scenes/Level1.unity: marked resolved with 2 questions GANG asked still unanswered"),
+        "{commit:?}"
+    );
+    assert!(team.sandbox.dir.path().join("bob/.git/MERGE_HEAD").exists());
 }

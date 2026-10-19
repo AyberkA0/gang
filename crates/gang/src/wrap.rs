@@ -27,6 +27,9 @@ pub fn run(invocation: &Invocation, name: &str, layers: &[Layer]) -> Result<i32>
         }
     }
     match (name, repo) {
+        ("add" | "rm" | "reset", Some(repo)) if settles_conflicts(invocation, &repo, name)? => {
+            Ok(1)
+        }
         ("add", Some(repo)) => add(invocation, &repo, &invocation.args),
         ("rm", Some(repo)) => rm(invocation, &repo),
         ("mv", Some(repo)) => mv(invocation, &repo),
@@ -355,6 +358,71 @@ fn strings(args: &[OsString]) -> Vec<String> {
     args.iter()
         .map(|a| a.to_string_lossy().into_owned())
         .collect()
+}
+
+/// Whether `gang add`, `gang rm` or `gang reset` would mark files with
+/// open conflicts as settled, as they stand (R40): for a scene that means
+/// every open question answered "mine" without a word. Says so; `gang
+/// bang` asks them one by one, and plain git (`gang git add`) still does it.
+fn settles_conflicts(invocation: &Invocation, repo: &Repo, name: &str) -> Result<bool> {
+    let args = strings(&invocation.args);
+    let pathspecs = positionals(&args, &["--chmod", "--pathspec-from-file"]);
+    let whole = match name {
+        "add" => {
+            pathspecs.is_empty()
+                && (has(&args, &["-A", "--all", "-u", "--update"])
+                    || args.iter().any(|a| a.starts_with("--pathspec-from-file")))
+        }
+        // A plain `git reset` empties the merge from the index; `--hard`,
+        // `--merge` and `--keep` give it up instead, which is fine.
+        "reset" => pathspecs.is_empty() && !has(&args, &["--hard", "--merge", "--keep", "--soft"]),
+        _ => false,
+    };
+    let reached = unmerged_reached(repo, &pathspecs, whole)?;
+    if reached.is_empty() {
+        return Ok(false);
+    }
+    refuse_settling(repo, name, &reached);
+    Ok(true)
+}
+
+/// Unmerged paths among what `pathspecs` reach; all of them for `whole`.
+fn unmerged_reached(repo: &Repo, pathspecs: &[String], whole: bool) -> Result<Vec<String>> {
+    if pathspecs.is_empty() && !whole {
+        return Ok(Vec::new());
+    }
+    let mut args: Vec<&str> = vec!["ls-files", "-u", "-z", "--"];
+    args.extend(pathspecs.iter().map(String::as_str));
+    let mut paths: Vec<String> = gang_core::repo::split_nul(&repo.run(args)?)
+        .into_iter()
+        .filter_map(|entry| entry.split_once('\t').map(|(_, path)| path.to_owned()))
+        .collect();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn refuse_settling(repo: &Repo, verb: &str, paths: &[String]) {
+    let open = crate::bang::open_questions(repo).unwrap_or(0);
+    eprintln!(
+        "✗ GANG asks every conflict on its own; `gang {verb}` would mark {} as {} stand{}, with {open} question{} unanswered:",
+        if paths.len() == 1 {
+            "this file settled"
+        } else {
+            "these files settled"
+        },
+        if paths.len() == 1 { "it" } else { "they" },
+        if paths.len() == 1 { "s" } else { "" },
+        if open == 1 { "" } else { "s" }
+    );
+    for path in paths.iter().take(10) {
+        eprintln!("    {path}");
+    }
+    if paths.len() > 10 {
+        eprintln!("    … {} more", paths.len() - 10);
+    }
+    ui::hint(format!(
+        "Answer them with `gang bang`. (Plain git still does it: `gang git {verb} …`.)"
+    ));
 }
 
 /// `-X ours` / `-X theirs` (git settles every text conflict for one side):
@@ -843,6 +911,33 @@ fn restore(invocation: &Invocation, repo: &Repo, checkout: bool) -> Result<i32> 
             );
             ui::hint(
                 "(Plain git still takes one side for whole files: `gang git checkout --theirs -- <file>`.)",
+            );
+            return Ok(1);
+        }
+    }
+    // Any other version of a file with open conflicts (`gang checkout
+    // MERGE_HEAD -- scene`, `gang restore .`) settles them all at once too
+    // (R40). `-m` / `--merge` / `--conflict` recreate the conflict instead.
+    let recreates =
+        has(&args, &["-m", "--merge"]) || args.iter().any(|a| a.starts_with("--conflict"));
+    if !recreates {
+        let pathspecs = positionals(
+            &args,
+            &[
+                "-s",
+                "--source",
+                "--pathspec-from-file",
+                "-b",
+                "-B",
+                "--orphan",
+            ],
+        );
+        let reached = unmerged_reached(repo, &pathspecs, false)?;
+        if !reached.is_empty() {
+            refuse_settling(
+                repo,
+                if checkout { "checkout" } else { "restore" },
+                &reached,
             );
             return Ok(1);
         }

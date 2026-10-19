@@ -240,6 +240,21 @@ fn pre_commit() -> Result<i32> {
         }
     }
 
+    // Open questions settled with plain git (`git add`, `commit -a`) on a
+    // file exactly as the merge driver left it: every one answered "mine"
+    // without a word (R40).
+    for (pending, open, untouched) in crate::bang::settled_outside(&repo).unwrap_or_default() {
+        if untouched {
+            blocked = true;
+            eprintln!(
+                "✗ {}: marked resolved with {open} question{} GANG asked still unanswered",
+                pending.path,
+                if open == 1 { "" } else { "s" }
+            );
+            eprintln!("  Fix: gang bang (it asks them again)");
+        }
+    }
+
     // Locks, reserved layer numbers and the bake policy.
     if gang_core::setup::is_gang_repo(&repo) {
         // Deleting an asset that scenes still use (R29): a warning, since
