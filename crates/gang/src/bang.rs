@@ -615,6 +615,13 @@ fn resolve_plain_file(
         repo.set_stash_mark(Some("git"));
     }
     let rebasing = repo.sides_swapped();
+    // Named as in the other questions: the teammate, or the committed
+    // version when a stash is applied.
+    let other = if repo.applying_stash() {
+        "the committed version".to_owned()
+    } else {
+        crate::plumbing::other_side_name(repo)
+    };
     let mut hunks = parse_hunks(&text);
     if rebasing {
         for part in &mut hunks {
@@ -651,7 +658,7 @@ fn resolve_plain_file(
                 );
                 println!("{}", "─".repeat(58));
                 println!("you:\n{}", indent(ours));
-                println!("theirs:\n{}", indent(theirs));
+                println!("{other}:\n{}", indent(theirs));
                 println!(
                     "[m] mine   [t] theirs   [b] both (mine first)   [B] both (theirs first)   [e] edit   [q] quit"
                 );

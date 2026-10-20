@@ -154,7 +154,7 @@ fn clean_text_merge(base: &str, ours: &str, theirs: &str, kind: &str) -> Result<
 
 /// A name for the other side of the merge: the merged branch's author, or
 /// during a rebase the author of the upstream commit it replays onto.
-fn other_side_name(repo: &gang_core::repo::Repo) -> String {
+pub(crate) fn other_side_name(repo: &gang_core::repo::Repo) -> String {
     let onto = repo.rebase_onto();
     let heads: Vec<&str> = match &onto {
         Some(onto) => vec![onto.as_str()],

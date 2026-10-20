@@ -373,8 +373,22 @@ fn merge(
         },
     );
     if rebase {
+        // git's "mark them resolved with git add" hints point away from
+        // gang bang, which asks every conflict.
+        command.args([
+            "-c",
+            "advice.mergeConflict=false",
+            "-c",
+            "advice.resolveConflict=false",
+        ]);
         command.args(["rebase", "-q", upstream]);
     } else {
+        command.args([
+            "-c",
+            "advice.mergeConflict=false",
+            "-c",
+            "advice.resolveConflict=false",
+        ]);
         command.args(["merge", "--no-edit", "-q", upstream]);
     }
     let status = command.status()?;
